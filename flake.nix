@@ -1,5 +1,5 @@
 {
-  description = "Rust environment";
+  description = "";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -12,8 +12,8 @@
       pkgs = import nixpkgs { inherit system; };
     in
     {
-      devShells.x86_64-linux.default = pkgs.mkShell {
-        buildInputs = with pkgs; [
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [
           rustc
           cargo
           clippy
