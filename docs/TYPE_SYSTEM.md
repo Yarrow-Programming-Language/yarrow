@@ -1,6 +1,6 @@
 # Type system
 
-Static types for Yarrow, derived from [`GRAMMAR.md`](GRAMMAR.md), [`SYNTAX.md`](SYNTAX.md), and [`AST.md`](AST.md). Ownership, borrowing, and regions are summarized only where they affect typing; see [`MEMORY_MODEL.md`](MEMORY_MODEL.md).
+Static types for Yarrow, derived from [`GRAMMAR.md`](GRAMMAR.md), [`SYNTAX.md`](SYNTAX.md), and [`AST.md`](AST.md). Ownership, borrowing, and regions are summarized only where they affect typing. For full details, see [`MEMORY_MODEL.md`](MEMORY_MODEL.md).
 
 Contents: [Primitive types](#primitive-types), [Composite types](#composite-types), [Copy vs non-copy](#copy-vs-non-copy), [Coercions](#coercions), [Conversions](#conversions), [Type checking](#type-checking).
 
@@ -26,11 +26,11 @@ Yarrow is stack-typed: every value on the evaluation stack has a static type, an
 
 Literals pick the smallest fitting concrete type:
 
-- Positive integers → smallest unsigned that fits (`42` → `u8`, `1_000` → `u16`, `0xAB12` → `u16`)
-- Negative integers → smallest signed that fits (`-900` → `i16`)
+- Positive integers -> smallest unsigned that fits (`42` -> `u8`, `1_000` -> `u16`, `0xAB12` -> `u16`)
+- Negative integers -> smallest signed that fits (`-900` -> `i16`)
 - Bases `0b` / `0x` follow the same fit rules on their magnitude
-- Floats → smallest float that fits (`3.14` → `f16`)
-- `"..."` → `string`, `'...'` → `rune`, `true`/`false` → `bool`
+- Floats -> smallest float that fits (`3.14` -> `f16`)
+- `"..."` -> `string`, `'...'` -> `rune`, `true`/`false` -> `bool`
 
 Underscores in numeric lexemes are digit separators only.
 
@@ -113,7 +113,7 @@ From the grammar:
 
 `dup` copies copy types. For non-copy values, duplicate access goes through borrows, not bitwise duplication of ownership.
 
-Parameter modifier `copy` deep-copies heap values (`string`, `list`, `hashmap`, structs, unions, arrays) into the callee’s local stack; without it, parameters are moved in declaration order. On scalars, enums, and pointers, `copy` has no effect (warning `W405`).
+Parameter modifier `copy` deep-copies heap values (`string`, `list`, `hashmap`, structs, unions, arrays) into the callee's local stack; without it, parameters are moved in declaration order. On scalars, enums, and pointers, `copy` has no effect (warning `W405`).
 
 ---
 
@@ -125,7 +125,7 @@ Implicit coercions are allowed only in specific contexts. Elsewhere, types must 
 
 1. **Variable declarations** - the value popped into `name mutable|const|static T` may coerce to `T`.
 2. **Function parameters** - each argument may coerce to the declared parameter type.
-3. **`set`** - the new value may coerce to the target’s declared type (including union member injection into a union variable).
+3. **`set`** - the new value may coerce to the target's declared type (including union member injection into a union variable).
 4. **Container / struct literal elements** - elements may coerce to the inferred or contextual element/field type.
 5. **`handle` fallback** - the fallback word should be usable at the success type of the handled call.
 
@@ -138,13 +138,13 @@ Implicit coercions are allowed only in specific contexts. Elsewhere, types must 
 | integer      | float                           | convert                                                                        |
 | float        | integer                         | saturating convert                                                             |
 | `bool`       | integer                         | `0` / `1`, then widen if needed                                                |
-| integer      | `bool`                          | non-zero → `true`                                                              |
+| integer      | `bool`                          | non-zero -> `true`                                                             |
 | integer      | `pointer<T>` / heap handle slot | address / null-style init (e.g. typed pointer from `allocate`)                 |
 | pointer-like | `pointer<_>`                    | address passes through when the target is a generic or compatible pointer slot |
 
 Same-width integer types that differ only in signedness may share a representation for coercion purposes when bits match.
 
-**Not** implicit: arbitrary struct ↔ struct, unrelated named types, or safe `reference<T>` ↔ `pointer<T>`.
+**Not** implicit: arbitrary struct <-> struct, unrelated named types, or safe `reference<T>` <-> `pointer<T>`.
 
 ### Numeric promotion (operators)
 
@@ -163,11 +163,11 @@ Conversions are coercions that change representation. In Yarrow they are not spe
 3. **Union packing** - storing a member value into a union-typed variable
 4. **Unsafe memory** - `load` / `store` on `pointer<T>` reinterprets bytes as `T`; raw `mem.load` / `mem.store` use untyped `i64` words and do not check pointee types
 
-There is no general user-level “as” / cast operator in the grammar. To change type outside coercion sites, go through a typed binding or (in `unsafe`) through pointers.
+There is no general user-level ""as"" / cast operator in the grammar. To change type outside coercion sites, go through a typed binding or (in `unsafe`) through pointers.
 
 ### `typeof` and type identity
 
-`typeof` yields a type value suitable for equality checks. It does not convert the original value’s payload; for references it reports the pointee. Comparing type values is the supported reflective conversion check (`x typeof T ==`).
+`typeof` yields a type value suitable for equality checks. It does not convert the original value's payload; for references it reports the pointee. Comparing type values is the supported reflective conversion check (`x typeof T ==`).
 
 ---
 
@@ -183,7 +183,7 @@ Checking walks the program in stack order. Each statement updates a typed stack 
 - `pop` removes one value (and releases a borrow if the value is a reference)
 - Declarations and `set` pop the value being stored
 - `if` / conditional `for` require a `bool` on top before the keyword
-- Iterable `for` requires an iterable (`array`, `list`, …) on top
+- Iterable `for` requires an iterable (`array`, `list`, ...) on top
 - `match` borrows its subject for the duration and restores the prior stack afterward
 - `return` takes the top as the return value (if any) and drops the rest; the result must match `with T` (or void)
 - `call` pops the callee (and uses preceding stack args per the signature), then pushes returns
@@ -235,7 +235,7 @@ lvalue set                               # pops new value
 - Declared type is authoritative after coercion.
 - `const`: single runtime binding.
 - `static`: initializer must be known at compile time.
-- Read: copy type → push copy; non-copy → push borrow.
+- Read: copy type -> push copy; non-copy -> push borrow.
 
 ### Control flow typing
 
@@ -244,26 +244,26 @@ lvalue set                               # pops new value
 **`match`**
 
 - Value / error style: words before `case` must leave a `bool`.
-- Union style: word before `case` is a member `Type`; the arm’s stack top becomes `reference<Member>`.
+- Union style: word before `case` is a member `Type`; the arm's stack top becomes `reference<Member>`.
 - Case types must be members of the subject union; `else` is required unless cases are exhaustive.
 - Subject borrow ends at `end`; the subject value is unchanged.
 
 **`for`**
 
 - Condition form: top is `bool` each iteration (while-style).
-- Iterable form: top is iterable; loop body may use `loop.value` / `loop.index` from `std.loop` (typed by the iterable’s element type / `i32`-like index).
+- Iterable form: top is iterable; loop body may use `loop.value` / `loop.index` from `std.loop` (typed by the iterable's element type / `i32`-like index).
 
 **`handle`** - success path yields the success type; on error, runs the handler and pushes the fallback, which must match the success type (via coercion if needed).
 
 ### Unions and errors
 
-- Assigning into a union variable requires the value’s type to be one of the members (after coercion to a member).
+- Assigning into a union variable requires the value's type to be one of the members (after coercion to a member).
 - Exhaustiveness: if every member has a `Type case`, `else` may be omitted; otherwise `else` is required.
 - Error returns use the same envelope idea as `|T Err|`: `unwrap` projects `T` or propagates; `handle` recovers with a typed fallback.
 
 ### Unsafe boundary (typing)
 
-Inside `unsafe … end` (and only there for call sites of `unsafe function`):
+Inside `unsafe ... end` (and only there for call sites of `unsafe function`):
 
 - `load` / `store` on `pointer<T>` are typed as `T`
 - Pointer arithmetic preserves `pointer<T>`
@@ -273,20 +273,19 @@ Outside `unsafe`, those operations are rejected. Unsafe never skips stack-effect
 
 ### Modules
 
-`"path" [alias] require` brings typed bindings into a scope. Qualified names (`io.write_line`, `Color.RED`, `error.OUT_OF_MEMORY`) resolve to the imported or declared entity’s type (function, enum member, error member, …).
+`"path" [alias] require` brings typed bindings into a scope. Qualified names (`io.write_line`, `Color.RED`, `error.OUT_OF_MEMORY`) resolve to the imported or declared entity's type (function, enum member, error member, ...).
 
 ---
 
 ## Summary of obligations
 
-| Check        | Rule                                                                           |
-| ------------ | ------------------------------------------------------------------------------ |
-| Stack effect | Every word’s pops/pushes match the live stack                                  |
-| Exactness    | Outside coercion sites, types match                                            |
-| Copy         | `dup` / plain reads only duplicate copy types                                  |
-| Borrow       | Non-copy reads and `borrow` yield references; `typeof` / `pop` release them    |
-| Union        | Members distinct; cases are member types; arms see `reference<Member>`         |
-| Errors       | Fallible returns are union literals; `unwrap`/`handle` match caller capability |
-| Unsafe       | Raw pointer ops and unsafe calls only in `unsafe`; checks otherwise unchanged  |
+Type checking enforces:
+- **Stack effect**: Every word's pops/pushes match the live stack
+- **Exactness**: Outside coercion sites, types match
+- **Copy**: `dup` / plain reads only duplicate copy types
+- **Borrow**: Non-copy reads and `borrow` yield references; `typeof` / `pop` release them
+- **Union**: Members distinct; cases are member types; arms see `reference<Member>`
+- **Errors**: Fallible returns are union literals; `unwrap`/`handle` match caller capability
+- **Unsafe**: Raw pointer ops and unsafe calls only in `unsafe`; checks otherwise unchanged
 
 Implementation details (Cranelift layouts, runtime kind codes) live under `crates/yarrow-core` and must stay consistent with this model, not the other way around.

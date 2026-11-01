@@ -1,4 +1,4 @@
-//! Stage 38 gate: warning catalog on `docs/examples/warnings/`.
+//! Stage 38 gate: warning catalog on `docs/examples/valid/16_*`–`21_*`.
 //!
 //! ```bash
 //! cargo run -p yarrow_core --example check_warnings
@@ -43,23 +43,23 @@ fn main() {
         .and_then(|p| p.parent())
         .expect("crates/yarrow-core → repo root");
 
-    let unused = check_fixture(repo, "docs/examples/warnings/01_unused.yar");
-    expect_codes(&unused, "01_unused.yar", &["W401", "W402", "W403"]);
+    let unused = check_fixture(repo, "docs/examples/valid/16_unused_warnings.yar");
+    expect_codes(&unused, "16_unused_warnings.yar", &["W401", "W402", "W403"]);
 
-    let never = check_fixture(repo, "docs/examples/warnings/02_never_written_and_copy.yar");
-    expect_codes(&never, "02_never_written_and_copy.yar", &["W404", "W405"]);
+    let never = check_fixture(repo, "docs/examples/valid/17_never_written_warnings.yar");
+    expect_codes(&never, "17_never_written_warnings.yar", &["W404", "W405"]);
 
-    let dead = check_fixture(repo, "docs/examples/warnings/03_unreachable.yar");
-    expect_codes(&dead, "03_unreachable.yar", &["W407"]);
+    let dead = check_fixture(repo, "docs/examples/valid/18_unreachable_warnings.yar");
+    expect_codes(&dead, "18_unreachable_warnings.yar", &["W407"]);
 
-    let ambig = check_fixture(repo, "docs/examples/warnings/04_require_ambiguous.yar");
-    expect_codes(&ambig, "04_require_ambiguous.yar", &["W406"]);
+    let ambig = check_fixture(repo, "docs/examples/valid/19_require_ambiguous_warnings.yar");
+    expect_codes(&ambig, "19_require_ambiguous_warnings.yar", &["W406"]);
 
-    let empty_match = check_fixture(repo, "docs/examples/warnings/05_empty_match.yar");
-    expect_codes(&empty_match, "05_empty_match.yar", &["W408"]);
+    let empty_match = check_fixture(repo, "docs/examples/valid/20_empty_match_warnings.yar");
+    expect_codes(&empty_match, "20_empty_match_warnings.yar", &["W408"]);
 
-    let empty_ctrl = check_fixture(repo, "docs/examples/warnings/06_empty_if_and_unsafe.yar");
-    expect_codes(&empty_ctrl, "06_empty_if_and_unsafe.yar", &["W409", "W410"]);
+    let empty_ctrl = check_fixture(repo, "docs/examples/valid/21_empty_if_unsafe_warnings.yar");
+    expect_codes(&empty_ctrl, "21_empty_if_unsafe_warnings.yar", &["W409", "W410"]);
 
     println!("ok: W401–W410 warning fixtures");
 }

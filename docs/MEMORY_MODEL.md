@@ -4,7 +4,7 @@ How Yarrow allocates, owns, borrows, and frees values. Derived from [`GRAMMAR.md
 
 Contents: [Ownership](#ownership), [Borrowing](#borrowing), [Regions](#regions), [Unsafe](#unsafe), [Mental model](#mental-model).
 
-Yarrow is safe by default. Heap lifetimes are tracked at compile time through ownership and borrows. There are no user-visible lifetime parameters on `reference<T>`. Every escape from the safe model is syntactically visible: `unsafe function`, `unsafe … end`, and `pointer<T>` operations.
+Yarrow is safe by default. Heap lifetimes are tracked at compile time through ownership and borrows. There are no user-visible lifetime parameters on `reference<T>`. Every escape from the safe model is syntactically visible: `unsafe function`, `unsafe ... end`, and `pointer<T>` operations.
 
 ---
 
@@ -12,7 +12,7 @@ Yarrow is safe by default. Heap lifetimes are tracked at compile time through ow
 
 A value is either **owned** (responsible for freeing heap storage) or **trivial** (scalars, enums, raw pointers, and similar: drop is a no-op). Non-copy heap types (`string`, `list`, `hashmap`, structs, unions, and heap-backed arrays) are owned when created on the stack or stored in a variable.
 
-See [`TYPE_SYSTEM.md`](TYPE_SYSTEM.md) for the copy / non-copy split.
+See [`TYPE_SYSTEM.md`](TYPE_SYSTEM.md) for the copy and non-copy type split.
 
 ### Stack ownership
 
@@ -37,20 +37,19 @@ A declaration pops a value and binds it under a name. The variable owns that val
 # myStr dropped at scope exit
 ```
 
-| Binding   | Ownership                                               |
-| --------- | ------------------------------------------------------- |
-| `mutable` | Owns; `set` drops the previous value                    |
-| `const`   | Owns; set once at runtime                               |
-| `static`  | Owned by the program; initializer known at compile time |
+Binding ownership:
+- **`mutable`**: Owns; `set` drops the previous value
+- **`const`**: Owns; set once at runtime
+- **`static`**: Owned by the program; initializer known at compile time
 
 Reading a variable:
 
-- **Copy type** → push a copy (owner unchanged).
-- **Non-copy type** → push a **borrow** (see Borrowing); the variable remains the owner.
+- **Copy type** -> push a copy (owner unchanged).
+- **Non-copy type** -> push a **borrow** (see Borrowing); the variable remains the owner.
 
 ### Function parameters
 
-Parameters are moved onto the callee’s local stack in declaration order (first declared = deepest).
+Parameters are moved onto the callee's local stack in declaration order (first declared = deepest).
 
 - Default: move ownership (or pass a borrow for reference parameters).
 - `copy`: deep-copy into the local stack; caller keeps ownership of the original.
@@ -64,7 +63,7 @@ Heap-typed receivers and many reference parameters are borrowed from the caller;
 source target move
 ```
 
-Transfers ownership of `source`’s storage to variable `target`. The source is then **moved**: further use or another move is a compile error. `target` drops whatever it previously owned.
+Transfers ownership of `source`'s storage to variable `target`. The source is then **moved**: further use or another move is a compile error. `target` drops whatever it previously owned.
 
 ```yarrow
 myList myList2 move
@@ -107,13 +106,12 @@ A **borrow** is a safe `reference<T>` (or an implicit borrow from reading a non-
 
 ### Creating borrows
 
-| Mechanism                 | Effect                                                             |
-| ------------------------- | ------------------------------------------------------------------ |
-| `value borrow`            | Pushes `reference<T>`; value must be borrowable (heap / aggregate) |
-| Read of non-copy variable | Pushes a borrow of the variable’s value                            |
-| `dup` on non-copy         | Not a second owner; use `borrow` (copy types may `dup`)            |
-| Union `Type case` arm     | Branch receives `reference<Member>`                                |
-| `match` subject           | Subject is borrowed for the whole `match`; stack restored after    |
+Borrows are created by:
+- `value borrow`: Pushes `reference<T>`; value must be borrowable (heap / aggregate)
+- Read of non-copy variable: Pushes a borrow of the variable's value
+- `dup` on non-copy: Not a second owner; use `borrow` (copy types may `dup`)
+- Union `Type case` arm: Branch receives `reference<Member>`
+- `match` subject: Subject is borrowed for the whole `match`; stack restored after
 
 There can be **only one active borrow** of a given value, but that borrow may move on the stack (passed to calls, rebound with `name const reference<T>`, etc.).
 
@@ -137,13 +135,12 @@ Writable methods take `reference<T> mutable` so the pointee must be a mutable bi
 
 ### Compile-time borrow rules
 
-| Situation                                                      | Result                              |
-| -------------------------------------------------------------- | ----------------------------------- |
-| Use value while borrowed (mutate / `set` / consuming op)       | Error                               |
-| `pop` / drop owner while a borrow is live                      | Error (release the reference first) |
-| Use or `move` after `move`                                     | Error (use-after-move)              |
-| Second overlapping `borrow` of the same value                  | Error                               |
-| Return or otherwise escape a reference past its owner / region | Error                               |
+The following situations are compile errors:
+- Use value while borrowed (mutate / `set` / consuming op)
+- `pop` / drop owner while a borrow is live (release the reference first)
+- Use or `move` after `move` (use-after-move)
+- Second overlapping `borrow` of the same value
+- Return or otherwise escape a reference past its owner / region
 
 `unsafe` does **not** disable these checks.
 
@@ -174,11 +171,11 @@ myRegion region.free call
 2. **Put** - attach an owned value to the region. Nested heap payloads are freed with the parent via kind codes; only top-level puts appear in the region registry.
 3. **Free** - free every attached value, then the region. Prefer `defer` so free runs on all exits.
 
-After `put`, the value’s lifetime is tied to the region. Escaping a safe reference to region memory past `region.free` (or past the owning scope) is a compile error.
+After `put`, the value's lifetime is tied to the region. Escaping a safe reference to region memory past `region.free` (or past the owning scope) is a compile error.
 
 ### Interaction with variable drop
 
-If a variable still names a value that a region already freed, the runtime’s freed-handle set makes a later scope-exit drop a no-op (no double free). Prefer structuring code so the region outlives (or clearly owns) those bindings, e.g. free in `defer` at the end of the scope that created both.
+If a variable still names a value that a region already freed, the runtime's freed-handle set makes a later scope-exit drop a no-op (no double free). Prefer structuring code so the region outlives (or clearly owns) those bindings, e.g. free in `defer` at the end of the scope that created both.
 
 ### What regions are for
 
@@ -197,7 +194,7 @@ Raw memory leaves the ownership and borrow model for **validity of addresses**. 
 | Construct              | Role                                                                          |
 | ---------------------- | ----------------------------------------------------------------------------- |
 | `name unsafe function` | Function may perform unsafe ops; **callers** must be in `unsafe`              |
-| `unsafe … end`         | Marks where unsafe ops occur (required even inside an `unsafe function` body) |
+| `unsafe ... end`       | Marks where unsafe ops occur (required even inside an `unsafe function` body) |
 | `pointer<T>`           | Typed raw address; pointee type is compile-time only                          |
 | `std.mem`              | `allocate`, `free`, and raw word load/store wrappers                          |
 
@@ -231,7 +228,7 @@ cp mem.free call
 - Does not turn off the borrow checker
 - Does not skip ownership or use-after-move checks on safe values
 - Does not skip stack-effect or type checks
-- Does not prove raw pointer validity, aliasing, or liveness: that is the programmer’s responsibility
+- Does not prove raw pointer validity, aliasing, or liveness: that is the programmer's responsibility
 
 ### Boundary summary
 
