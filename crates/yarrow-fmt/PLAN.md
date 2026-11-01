@@ -1,47 +1,111 @@
 # Yarrow Formatter Implementation Plan
 
-Library and binary that rewrite `.yar` source to match `docs/STYLE_GUIDE.md`.
+Based on schema [SCHEMA.md](SCHEMA.md).
 
-`yarrow-fmt` is a **tooling crate**. It may depend on `yarrow-core` for tokenize / parse / diagnostics. It does **not** type-check, borrow-check, or codegen. CLI wiring (`yarrow fmt`) lives in `crates/yarrow-cli/PLAN.md`. Editors format via `yarrow-lsp` calling the same `format_source` API.
+## Overview
 
-## Source of truth
+- **Name:** Yarrow Formatter
+- **Description:** Library and binary that rewrite `.yar` source to match `docs/STYLE_GUIDE.md`. `yarrow-fmt` is a tooling crate. It may depend on `yarrow-core` for tokenize / parse / diagnostics. It does **not** type-check, borrow-check, or codegen. CLI wiring (`yarrow fmt`) lives in `crates/yarrow-cli/PLAN.md`. Editors format via `yarrow-lsp` calling the same `format_source` API.
+- **Last Updated:** 2026-11-01
 
-- **Layout / idiomatic form:** `docs/STYLE_GUIDE.md`
-- Language syntax: `docs/GRAMMAR.md`, `docs/SYNTAX.md`
-- Intended AST: `docs/AST.md`
-- Corpus (format gates): `docs/examples/{valid,invalid}/**`, `docs/guides/project_examples/**`, `crates/yarrow-core/lib/std/**`, fixtures
-- Compiler API: `crates/yarrow-core/PLAN.md`
-- Agent rules: `AGENTS.md`
+## Sources of Truth
 
-When the style guide and the formatter disagree, **change the formatter** (or amend the guide deliberately). Do not invent layout rules absent from the style guide.
+- **Path:** `docs/STYLE_GUIDE.md`
+  **Type:** Layout / Idiomatic Form
+- **Path:** `docs/GRAMMAR.md`
+  **Type:** Language Syntax
+- **Path:** `docs/SYNTAX.md`
+  **Type:** Formal Syntax
+- **Path:** `docs/AST.md`
+  **Type:** Intended AST
+- **Path:** `docs/examples/{valid,invalid}/**`
+  **Type:** Corpus (format gates)
+- **Path:** `docs/guides/project_examples/**`
+  **Type:** Corpus (format gates)
+- **Path:** `crates/yarrow-core/lib/std/**`
+  **Type:** Corpus (format gates)
+- **Path:** `crates/yarrow-core/PLAN.md`
+  **Type:** Compiler API
+- **Path:** `AGENTS.md`
+  **Type:** Agent Rules
+
+**Rule:** When the style guide and the formatter disagree, **change the formatter** (or amend the guide deliberately). Do not invent layout rules absent from the style guide.
 
 ---
 
 ## Scope
 
-### In scope
+### In Scope
 
-Mechanical rewrite of parseable source:
+- **Name:** Mechanical Rewrite
+  **Description:** Mechanical rewrite of parseable source
+  **Status:** landed
 
-- Source file hygiene: UTF-8, LF, no trailing whitespace, final newline
-- Indent: one tab per nesting level; no space indent
-- Soft wrap target: 100 columns (break before consuming words); `FormatOptions::max_width` / `--max-width`
-- Blank-line rules between top-level items and inside bodies
-- Construct layout: `require`, types, `implement`, functions, `if`/`match`/`for`/`defer`/`unsafe`, calls, containers
-- Comment text preserved; spacing around `#` normalized where the guide is explicit (`# ` after hash; one space before trailing `#`)
-- Opt-in file-layout reorder; require sorting on by default (`--no-sort-requires` to disable)
-- Best-effort hygiene on incomplete parse; selective construct reprint when recovery spans are trustworthy
-- Diff-friendly ignore regions via `# yarrow-fmt-ignore-begin` / `# yarrow-fmt-ignore-end`
-- Parallel multi-file driver
-- CLI range mode: `--range START:END` prints `format_range` edit encoding
+- **Name:** Source File Hygiene
+  **Description:** UTF-8, LF, no trailing whitespace, final newline
+  **Status:** landed
 
-### Out of scope
+- **Name:** Indentation
+  **Description:** One tab per nesting level; no space indent
+  **Status:** landed
 
-- Renaming (`PascalCase`, etc.): Naming is style/lint, not rewrite; core warnings / future lint
-- Idiom rewrites (`+` to `~`, etc.): Semantic / teachable; not silent format
-- Type-check / borrow fixes: Compiler / `yarrow check`
-- Tabs vs spaces as a config knob: Style guide fixes tabs; formatter always emits tabs
-- Editor format-on-save wiring: Editor / LSP client; server already exposes full-doc format
+- **Name:** Soft Wrap
+  **Description:** Soft wrap target: 100 columns (break before consuming words); `FormatOptions::max_width` / `--max-width`
+  **Status:** landed
+
+- **Name:** Blank Line Rules
+  **Description:** Blank-line rules between top-level items and inside bodies
+  **Status:** landed
+
+- **Name:** Construct Layout
+  **Description:** Layout for `require`, types, `implement`, functions, `if`/`match`/`for`/`defer`/`unsafe`, calls, containers
+  **Status:** landed
+
+- **Name:** Comment Preservation
+  **Description:** Comment text preserved; spacing around `#` normalized where the guide is explicit (`# ` after hash; one space before trailing `#`)
+  **Status:** landed
+
+- **Name:** Require Sorting
+  **Description:** Opt-in file-layout reorder; require sorting on by default (`--no-sort-requires` to disable)
+  **Status:** landed
+
+- **Name:** Incomplete Parse
+  **Description:** Best-effort hygiene on incomplete parse; selective construct reprint when recovery spans are trustworthy
+  **Status:** landed
+
+- **Name:** Ignore Regions
+  **Description:** Diff-friendly ignore regions via `# yarrow-fmt-ignore-begin` / `# yarrow-fmt-ignore-end`
+  **Status:** landed
+
+- **Name:** Parallel Processing
+  **Description:** Parallel multi-file driver
+  **Status:** landed
+
+- **Name:** CLI Range Mode
+  **Description:** `--range START:END` prints `format_range` edit encoding
+  **Status:** landed
+
+### Out of Scope
+
+- **Name:** Renaming
+  **Description:** Naming is style/lint, not rewrite; core warnings / future lint
+  **Status:** out_of_scope
+
+- **Name:** Idiom Rewrites
+  **Description:** Semantic / teachable; not silent format
+  **Status:** out_of_scope
+
+- **Name:** Type-check / Borrow Fixes
+  **Description:** Compiler / `yarrow check`
+  **Status:** out_of_scope
+
+- **Name:** Tabs vs Spaces Config
+  **Description:** Style guide fixes tabs; formatter always emits tabs
+  **Status:** out_of_scope
+
+- **Name:** Editor Format-on-save
+  **Description:** Editor / LSP client; server already exposes full-doc format
+  **Status:** out_of_scope
 
 **Idempotence:** `format(format(src)) == format(src)` for accepted inputs (fully parsed subset only when best-effort).
 
@@ -55,7 +119,7 @@ source (.yar)
   -> parse / parse_recovering (yarrow-core)
   -> format IR (AST + TriviaMap)
   -> printer (STYLE_GUIDE rules: construct -> phrase wrap -> indent -> blanks -> hygiene)
-    or hygiene-only / selective reprint when parse incomplete (format_source_best_effort);
+    or hygiene-only / selective reprint when parse incomplete (format_source_best_effort)
       ignore regions restored from hygiened original after layout
   -> UTF-8 string / write back
 
@@ -66,7 +130,7 @@ multi-file run_fmt: independent paths formatted in parallel (rayon);
   (no file write); editors keep using LSP rangeFormatting
 ```
 
-Public surface:
+### Public Surface
 
 ```rust
 pub struct FormatOptions {
@@ -90,133 +154,233 @@ pub struct FmtInput { /* options, check, stdin, best_effort, range, paths */ }
 pub fn run_fmt(program: &str, input: FmtInput) -> ExitCode;
 ```
 
-CLI (`yarrow-fmt` and `yarrow fmt`):
+### CLI
 
-- default: Format files in place
-- `--check`: Exit non-zero if any file would change
-- `--stdin`: Read stdin, write formatted stdout
-- `--max-width N`: Soft wrap width (default 100; min 20)
-- `--sort-requires`: Force-on require sorting (default already on)
-- `--no-sort-requires`: Keep top-level require source order
-- `--reorder-layout`: Opt-in top-level file-layout reorder
-- `--best-effort`: On parse failure, hygiene (and selective reprint)
-- `--range START:END`: Byte-span edit encoding to stdout
-- paths / dirs: `.yar` files; recurse directories
+- **Default:** Format files in place
+- **`--check`:** Exit non-zero if any file would change
+- **`--stdin`:** Read stdin, write formatted stdout
+- **`--max-width N`:** Soft wrap width (default 100; min 20)
+- **`--sort-requires`:** Force-on require sorting (default already on)
+- **`--no-sort-requires`:** Keep top-level require source order
+- **`--reorder-layout`:** Opt-in top-level file-layout reorder
+- **`--best-effort`:** On parse failure, hygiene (and selective reprint)
+- **`--range START:END`:** Byte-span edit encoding to stdout
+- **Paths / Dirs:** `.yar` files; recurse directories
 
-Exit codes: `0` ok / already formatted (`--check`), `1` would reformat or parse/format failure, `2` usage / I/O.
+**Exit codes:** `0` ok / already formatted (`--check`), `1` would reformat or parse/format failure, `2` usage / I/O.
 
 ---
 
-## Status
+## Current State
 
-Stages 0-22 are complete. Historical stage write-ups were removed; git history keeps them.
+### Landed Features
 
-Landed features:
+- **Name:** Core Comment Tokens
+  **Description:** `TokenKind::Comment`; parser skips; printer rebuilds whitespace
+  **Status:** landed
 
-- Core comment tokens: `TokenKind::Comment`; parser skips; printer rebuilds whitespace
-- Format IR: `FormatIr` + `TriviaMap` (leading / trailing / file trailing)
-- Hygiene: LF, strip trailing WS, final newline; `NotUtf8` on bad files
-- Indent / blanks: Tab nesting; aligned `end`; top-level blanks; collapse doubles
-- Construct + control layout: Requires, types, functions, if/match/for/defer/unsafe/handle
-- Phrase wrap: Soft wrap before consuming words; continuation +1 tab
-- Comments: Preserve text; `# ` / ` #` spacing
-- Require sort (default on): `sort_requires` / `--no-sort-requires`
-- Library + binary: `format_source` / `format_file`; `yarrow-fmt` `--check` / `--stdin`
-- Shared driver: `run_fmt` / `FmtInput` for binary and CLI
-- `yarrow fmt`: In-process wrapper (`yarrow-cli` Stage 12)
-- Corpus gate: `valid` / `warnings` / `project` + `lib/std` + stage19 fixture; CI `fmt-check`
-- LSP full-document format: `yarrow-lsp` uses `format_source_best_effort`
-- File layout reorder (opt-in): `reorder_layout` / `--reorder-layout`
-- Defaults polish: sort on by default; `MIN_MAX_WIDTH`; no spaces-indent
-- Range / span format API: `format_range` / `FormatRangeEdit` (LSP Stage 17)
-- Stdlib + CI `--check`: `scripts/fmt-check.sh` / CI workflow
-- Best-effort incomplete parse: hygiene subset + `Parser::parse_recovering`
-- Selective construct reprint: recovered top-level decls reprint when spans clear errors
-- Ignore regions: `# yarrow-fmt-ignore-begin` / `# yarrow-fmt-ignore-end`
-- Parallel multi-file driver: rayon over independent paths; sorted reporting
-- Widened fmt-check corpus: `valid/16_*`–`21_*`, `invalid/**`, `docs/guides/project_examples/**`, stage19 fixture on the CI gate
-- CLI range mode: `--range START:END`; `yarrow-fmt-range-v1` stdout encoding
+- **Name:** Format IR
+  **Description:** `FormatIr` + `TriviaMap` (leading / trailing / file trailing)
+  **Status:** landed
+
+- **Name:** Hygiene
+  **Description:** LF, strip trailing WS, final newline; `NotUtf8` on bad files
+  **Status:** landed
+
+- **Name:** Indent / Blanks
+  **Description:** Tab nesting; aligned `end`; top-level blanks; collapse doubles
+  **Status:** landed
+
+- **Name:** Construct + Control Layout
+  **Description:** Requires, types, functions, if/match/for/defer/unsafe/handle
+  **Status:** landed
+
+- **Name:** Phrase Wrap
+  **Description:** Soft wrap before consuming words; continuation +1 tab
+  **Status:** landed
+
+- **Name:** Comments
+  **Description:** Preserve text; `# ` / ` #` spacing
+  **Status:** landed
+
+- **Name:** Require Sort
+  **Description:** `sort_requires` / `--no-sort-requires`
+  **Status:** landed
+
+- **Name:** Library + Binary
+  **Description:** `format_source` / `format_file`; `yarrow-fmt` `--check` / `--stdin`
+  **Status:** landed
+
+- **Name:** Shared Driver
+  **Description:** `run_fmt` / `FmtInput` for binary and CLI
+  **Status:** landed
+
+- **Name:** CLI Integration
+  **Description:** `yarrow fmt`: In-process wrapper (`yarrow-cli` Stage 12)
+  **Status:** landed
+
+- **Name:** Corpus Gate
+  **Description:** `valid` / `warnings` / `project` + `lib/std` + stage19 fixture; CI `fmt-check`
+  **Status:** landed
+
+- **Name:** LSP Integration
+  **Description:** Full-document format via `format_source_best_effort`
+  **Status:** landed
+
+- **Name:** File Layout Reorder
+  **Description:** `reorder_layout` / `--reorder-layout` (opt-in)
+  **Status:** landed
+
+- **Name:** Defaults Polish
+  **Description:** Sort on by default; `MIN_MAX_WIDTH`; no spaces-indent
+  **Status:** landed
+
+- **Name:** Range / Span Format API
+  **Description:** `format_range` / `FormatRangeEdit` (LSP Stage 17)
+  **Status:** landed
+
+- **Name:** Stdlib + CI
+  **Description:** `scripts/fmt-check.sh` / CI workflow
+  **Status:** landed
+
+- **Name:** Best-effort Incomplete Parse
+  **Description:** Hygiene subset + `Parser::parse_recovering`
+  **Status:** landed
+
+- **Name:** Selective Construct Reprint
+  **Description:** Recovered top-level decls reprint when spans clear errors
+  **Status:** landed
+
+- **Name:** Ignore Regions
+  **Description:** `# yarrow-fmt-ignore-begin` / `# yarrow-fmt-ignore-end`
+  **Status:** landed
+
+- **Name:** Parallel Multi-file Driver
+  **Description:** Rayon over independent paths; sorted reporting
+  **Status:** landed
+
+- **Name:** Widened Fmt-check Corpus
+  **Description:** `valid/16_*`–`21_*`, `invalid/**`, `docs/guides/project_examples/**`, stage19 fixture on the CI gate
+  **Status:** landed
+
+- **Name:** CLI Range Mode
+  **Description:** `--range START:END`; `yarrow-fmt-range-v1` stdout encoding
+  **Status:** landed
 
 **Gates:** `./scripts/fmt-check.sh` (or `yarrow fmt --check` on the Stage 21 path set) exits `0`; `cargo fmt && cargo check && cargo clippy` green for `yarrow_fmt` / `yarrow_cli`.
 
 ---
 
-## Backlog (new tasks from backlog)
+## Mapping: Style Guide to Stages
 
-### Stage 23 - Naming lints
-
-Belong in core warnings or a future `yarrow lint`, not silent format.
-
-1. Define naming conventions in style guide (if not already done)
-2. Implement naming lints in core (not in formatter)
-3. Add CLI command `yarrow lint` for naming and style checks
-4. Keep formatter focused on mechanical layout
-
-**Gate:** New lint command works; formatter does not silently rename. `cargo clippy` green.
-
----
-
-### Stage 24 - On-type format helpers
-
-LSP Stage 23: local indent after `end`+newline (no fmt API yet).
-
-1. Coordinate with `yarrow-lsp` on on-type formatting needs
-2. Implement local indent adjustment for specific patterns
-3. Ensure it does not conflict with full document formatting
-4. Test with editor workflows
-
-**Gate:** On-type formatting works in LSP; full document format unchanged. `cargo clippy` green.
+| Style Guide Section                    | Status                                        |
+| -------------------------------------- | --------------------------------------------- |
+| Principles                             | Design only                                   |
+| Source files                           | Landed                                        |
+| Indentation and line width             | Landed                                        |
+| Blank lines                            | Landed                                        |
+| Comments                               | Landed; ignore markers done                   |
+| Naming                                 | Out of scope (core / lint)                    |
+| File layout (order)                    | Landed (opt-in)                               |
+| Modules and require                    | Landed                                        |
+| Visibility                             | Landed (print as written); order via Stage 13 |
+| Types / Functions / Variables          | Landed                                        |
+| Stack phrases and operators            | Landed                                        |
+| Literals and containers                | Landed                                        |
+| Control flow / Defer / Unsafe / Errors | Landed                                        |
+| Ownership / Stack hygiene              | Out of scope (semantics)                      |
+| Checklist                              | Landed layout rows; naming rows ignored       |
+| Tooling / ignore                       | Done; CLI `--range` done                      |
 
 ---
 
-### Stage 25 - Format config file
+## Phases
 
-Only if multi-flag defaults become painful; guide must define it.
+### Phase 0-22
 
-1. Monitor if users need per-project format configuration
-2. If needed, design config file format (TOML or JSON)
-3. Implement config file discovery and parsing
-4. Allow overrides via CLI flags
-
-**Gate:** Config file works; CLI flags still override. `cargo clippy` green.
-
----
-
-### Stage 26 - Incremental / cached IR
-
-After Stage 20 if parse dominates wall time (Stage 20 landed parallel files only).
-
-1. Profile formatting performance on large codebases
-2. If parse is bottleneck, implement caching of format IR
-3. Invalidate cache on source changes
-4. Ensure correctness (format output must be identical)
-
-**Gate:** Performance improvement demonstrated; output unchanged. `cargo clippy` green.
+- **Name:** Core Formatter Development
+- **Description:** Initial formatter implementation with all major features
+- **Status:** landed
+- **Stages:**
+  - **Number:** 0-22
+    **Name:** Formatter Pipeline
+    **Description:** Complete formatter pipeline from parsing to output
+    **Status:** landed
+    **Gate:** All formatting stages complete and tested
 
 ---
 
-## Mapping: style guide to stages
+## Backlog
 
-- Principles: Design only
-- Source files: Landed
-- Indentation and line width: Landed
-- Blank lines: Landed
-- Comments: Landed; ignore markers done
-- Naming: Out of scope (core / lint)
-- File layout (order): Landed (opt-in)
-- Modules and require: Landed
-- Visibility: Landed (print as written); order via Stage 13
-- Types / Functions / Variables: Landed
-- Stack phrases and operators: Landed
-- Literals and containers: Landed
-- Control flow / Defer / Unsafe / Errors: Landed
-- Ownership / Stack hygiene: Out of scope (semantics)
-- Checklist: Landed layout rows; naming rows ignored
-- Tooling / ignore: Done; CLI `--range` done
+### Stage 23 - Naming Lints
+
+- **Number:** 23
+- **Name:** Naming Lints
+- **Description:** Belong in core warnings or a future `yarrow lint`, not silent format
+- **Status:** pending
+- **Priority:** low
+- **Tasks:**
+  - **Description:** Define naming conventions in style guide (if not already done)
+  - **Description:** Implement naming lints in core (not in formatter)
+  - **Description:** Add CLI command `yarrow lint` for naming and style checks
+  - **Description:** Keep formatter focused on mechanical layout
+- **Gate:** New lint command works; formatter does not silently rename. `cargo clippy` green.
 
 ---
 
-## Working rules
+### Stage 24 - On-type Format Helpers
+
+- **Number:** 24
+- **Name:** On-type Format Helpers
+- **Description:** LSP Stage 23: local indent after `end`+newline (no fmt API yet)
+- **Status:** pending
+- **Priority:** low
+- **Dependencies:**
+  - **Crate:** yarrow-lsp
+    **Stage:** 23
+    **Description:** On-type formatting needs
+- **Tasks:**
+  - **Description:** Coordinate with `yarrow-lsp` on on-type formatting needs
+  - **Description:** Implement local indent adjustment for specific patterns
+  - **Description:** Ensure it does not conflict with full document formatting
+  - **Description:** Test with editor workflows
+- **Gate:** On-type formatting works in LSP; full document format unchanged. `cargo clippy` green.
+
+---
+
+### Stage 25 - Format Config File
+
+- **Number:** 25
+- **Name:** Format Config File
+- **Description:** Only if multi-flag defaults become painful; guide must define it
+- **Status:** pending
+- **Priority:** low
+- **Tasks:**
+  - **Description:** Monitor if users need per-project format configuration
+  - **Description:** If needed, design config file format (TOML or JSON)
+  - **Description:** Implement config file discovery and parsing
+  - **Description:** Allow overrides via CLI flags
+- **Gate:** Config file works; CLI flags still override. `cargo clippy` green.
+
+---
+
+### Stage 26 - Incremental / Cached IR
+
+- **Number:** 26
+- **Name:** Incremental / Cached IR
+- **Description:** After Stage 20 if parse dominates wall time (Stage 20 landed parallel files only)
+- **Status:** pending
+- **Priority:** low
+- **Tasks:**
+  - **Description:** Profile formatting performance on large codebases
+  - **Description:** If parse is bottleneck, implement caching of format IR
+  - **Description:** Invalidate cache on source changes
+  - **Description:** Ensure correctness (format output must be identical)
+- **Gate:** Performance improvement demonstrated; output unchanged. `cargo clippy` green.
+
+---
+
+## Working Rules
 
 - Prefer minimal diffs that pass the **current** stage gate.
 - Do not add tests unless explicitly asked; use fixtures + `docs/examples/**` as gates.
