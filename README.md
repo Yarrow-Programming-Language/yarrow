@@ -12,9 +12,9 @@
 
 ---
 
-Yarrow is postfix and stack-oriented: you push values, then the word that consumes them. Heap data is owned; `borrow` creates safe `reference<T>` values; regions free groups of allocations together. Raw pointers stay behind a visible `unsafe` boundary that does **not** turn off ownership or borrow checking.
+Yarrow is a statically typed stack-based language. It combines postfix syntax with explicit stack effects, ownership, and regions to provide memory safety without lifetime annotations. Unsafe operations are explicitly marked and still respect ownership and borrow checking.
 
-## Quick look
+## Example
 
 ```yarrow
 "std.io" io require
@@ -35,56 +35,52 @@ cargo run -- docs/examples/valid/01_hello.yar
 # Hello, Yarrow!
 ```
 
-## What you get
+## Quick start
 
-- **Stack-oriented** - postfix words, explicit stack effects, composable phrases
-- **Ownership and regions** - no user-visible lifetime parameters on types
-- **Safe vs unsafe** - `reference<T>` in safe code; `pointer<T>` and `mem.*` only in `unsafe`
-- **Modules** - `"path" [alias] require` (keyword last); std is embedded
-- **Tooling today** - `run` (JIT or native), `compile`, `check`, `interpret`, `dump`, `explain`
-- **In progress** - formatter (`yarrow-fmt`) and language server (`yarrow-lsp`)
-
-## Build and run
-
-Requires a Rust toolchain (edition 2024) and, for native `object` / executable linking on Linux, a system linker (`ld` or `lld`).
+Requires a Rust toolchain (edition 2024) and, for native linking on Linux, a system linker (`ld` or `lld`).
 
 ```bash
 cargo build --release
 cargo run -- docs/examples/valid/01_hello.yar
 ```
 
-Useful commands:
+Common commands:
 
 ```bash
-cargo run -- check docs/examples/valid/01_hello.yar
-cargo run -- compile -o /tmp/hello.o docs/examples/valid/01_hello.yar
-cargo run -- run docs/examples/valid/01_hello.yar
-cargo run -- run --target jit docs/examples/valid/01_hello.yar
-cargo run -- interpret docs/examples/valid/01_hello.yar
-cargo run -- dump --emit ast docs/examples/valid/01_hello.yar
-cargo run -- explain E360
+cargo run -- check <file.yar>          # Type-check only
+cargo run -- compile -o out.o <file>   # Compile to object file
+cargo run -- run <file.yar>             # Compile and run (native)
+cargo run -- run --target jit <file>   # JIT execution
+cargo run -- interpret <file.yar>      # Interpreted execution
+cargo run -- dump --emit ast <file>    # AST dump
+cargo run -- explain E360               # Look up error code
 ```
 
-`cargo run -- <file.yar>` is the same as `run --target object` with entry `main` (link + exec). Use `--target jit` for in-process run, or `--main` to pick another entry name.
+`cargo run -- <file.yar>` defaults to `run --target object` with `main` as entry point. Use `--target jit` for in-process execution or `--main` to specify a different entry.
 
 ## Repository layout
 
-- [`crates/yarrow-core`](crates/yarrow-core) - tokenizer, parser, checker, JIT / object / executable / interpret (`Session` API)
-- [`crates/yarrow-runtime`](crates/yarrow-runtime) - host heap and `HOST_FNS`; [`aot/`](crates/yarrow-runtime/aot) staticlib for linking
-- [`crates/yarrow-cli`](crates/yarrow-cli) - Clap driver used by the root `yarrow` binary
-- [`crates/yarrow-fmt`](crates/yarrow-fmt) / [`crates/yarrow-lsp`](crates/yarrow-lsp) - formatter and LSP (planned)
-- [`docs/`](docs/README.md) - language reference, style guide, and examples
-- [`crates/yarrow-core/lib/std`](crates/yarrow-core/lib/std) - standard library written in Yarrow
+- `crates/yarrow-core` - tokenizer, parser, type checker, JIT/object/interpret execution (`Session` API)
+- `crates/yarrow-runtime` - host heap and `HOST_FNS`; `aot/` contains staticlib for linking
+- `crates/yarrow-cli` - Clap-based CLI driver
+- `crates/yarrow-fmt` - code formatter (planned)
+- `crates/yarrow-lsp` - language server (planned)
+- `docs/` - [language reference, style guide, and examples](docs/README.md)
+- `crates/yarrow-core/lib/std` - standard library written in Yarrow
 
-Roadmaps and gates: `crates/**/PLAN.md`. Agent conventions: [`AGENTS.md`](AGENTS.md).
+Implementation roadmaps: `crates/**/PLAN.md`
 
-## Status
+## Project status
 
-Core and CLI through the planned compile / check / interpret / native-run stages are landed. The language docs and [`docs/examples`](docs/examples/README.md) describe the intended shape; prefer the grammar when an example and the unfinished compiler disagree. Formatter and LSP are staged next in their crate plans.
+Core compiler and CLI support compile, check, interpret, and native execution. Language design is documented in [`docs/`](docs/README.md); prefer the grammar specification when examples and implementation disagree. Formatter and LSP are next on the roadmap.
 
-## Learn more
+## Documentation
 
-- [Documentation index](docs/README.md) - grammar, syntax, types, memory, runtime, style
-- [Grammar tour](docs/GRAMMAR.md) - language by annotated example
-- [Examples](docs/examples/README.md) - valid and invalid programs
-- [Style guide](docs/STYLE_GUIDE.md) - layout for human code and the future formatter
+- [Documentation index](docs/README.md)
+- [Grammar tour](docs/GRAMMAR.md)
+- [Examples](docs/examples/README.md)
+- [Style guide](docs/STYLE_GUIDE.md)
+
+## AI contribution
+
+The Yarrow language syntax and rules were designed by the project author. The compiler implementation - including the tokenizer, parser, type checker, and execution backends (JIT, object emit, interpret) - was developed with AI assistance.
