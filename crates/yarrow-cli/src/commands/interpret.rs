@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use yarrow_core::{Session, SessionOptions};
+use yarrow_core::{RunResult, Session, SessionOptions};
 
 use crate::args::GlobalArgs;
 use crate::commands::print_run_result;
@@ -52,8 +52,11 @@ pub fn interpret_file(
     let session = Session::new(opts);
     match session.interpret_source(source) {
         Ok(result) => {
-            print_run_result(result);
-            ExitCode::SUCCESS
+            print_run_result(result.clone());
+            match result {
+                RunResult::Int(n) => ExitCode::from(n as u8),
+                _ => ExitCode::SUCCESS,
+            }
         }
         Err(diags) => report_session_failure(&diags, color),
     }

@@ -292,6 +292,19 @@ pub extern "C" fn yarrow_list_len(l: u64) -> u64 {
     unsafe { (*(l as *const List)).len as u64 }
 }
 
+pub extern "C" fn yarrow_list_get(l: u64, index: u64) -> u64 {
+    unsafe {
+        let list = &*(l as *const List);
+        if index >= list.len as u64 {
+            return 0;
+        }
+        let src = list.data.add(index as usize * list.elem_size);
+        let mut value: u64 = 0;
+        std::ptr::copy_nonoverlapping(src, &mut value as *mut u64 as *mut u8, list.elem_size);
+        value
+    }
+}
+
 pub extern "C" fn yarrow_list_push(l: u64, value: u64) {
     unsafe {
         let list = &mut *(l as *mut List);
@@ -1200,6 +1213,13 @@ pub static HOST_FNS: std::sync::LazyLock<Vec<HostFn>> = std::sync::LazyLock::new
             params: &[KIND_I64],
             returns: &[KIND_I64],
             address: yarrow_list_len as *const () as usize,
+            safety: Safety::Safe,
+        },
+        HostFn {
+            name: "list_get",
+            params: &[KIND_I64, KIND_I64],
+            returns: &[KIND_I64],
+            address: yarrow_list_get as *const () as usize,
             safety: Safety::Safe,
         },
         HostFn {

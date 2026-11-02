@@ -1589,39 +1589,106 @@ impl Interpreter {
         let pre = stack.len();
         self.eval_expr(source, stack, frame, module, caller_fq, span)?;
         let iterable = self.pop(stack, span, "'for' iterable")?;
-        let elems = match iterable.value {
-            Value::Array(elems) => elems,
+
+        match iterable.value {
+            Value::Array(elems) => {
+                for (i, elem) in elems.into_iter().enumerate() {
+                    while stack.len() > pre {
+                        stack.pop().unwrap().drop_owned();
+                    }
+                    let elem_slot = Slot {
+                        kind: infer_value_kind(&elem),
+                        value: elem,
+                    };
+                    frame.loops.push(LoopCtx {
+                        value: Some(elem_slot),
+                        index: Some(i as i64),
+                    });
+                    let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+                    if let Some(ctx) = frame.loops.pop()
+                        && let Some(v) = ctx.value
+                    {
+                        v.drop_owned();
+                    }
+                    if flow == Flow::Return {
+                        return Ok(Flow::Return);
+                    }
+                    if stack.len() != pre {
+                        return Err(InterpretError::new(
+                            "for body must leave the stack balanced",
+                            span,
+                            "E325",
+                        ));
+                    }
+                }
+            }
+            Value::Heap { handle, owned } => {
+                if (iterable.kind & 0xff) != KIND_LIST {
+                    iterable.drop_owned();
+                    return Err(InterpretError::new(
+                        "'for' requires an array or list iterable",
+                        span,
+                        "E394",
+                    ));
+                }
+                let elem_kind = (iterable.kind >> 8) & 0xff;
+                let len = runtime::yarrow_list_len(handle);
+                for i in 0..len {
+                    while stack.len() > pre {
+                        stack.pop().unwrap().drop_owned();
+                    }
+                    let bits = runtime::yarrow_list_get(handle, i);
+                    let elem_slot = Slot {
+                        kind: elem_kind,
+                        value: match elem_kind {
+                            KIND_STRING => Value::Str {
+                                handle: bits,
+                                owned: false,
+                            },
+                            KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
+                                handle: bits,
+                                owned: false,
+                            },
+                            _ => Value::Int(bits as i64),
+                        },
+                    };
+                    frame.loops.push(LoopCtx {
+                        value: Some(elem_slot),
+                        index: Some(i as i64),
+                    });
+                    let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+                    if let Some(ctx) = frame.loops.pop()
+                        && let Some(v) = ctx.value
+                    {
+                        v.drop_owned();
+                    }
+                    if flow == Flow::Return {
+                        if owned {
+                            free_value(handle, KIND_LIST);
+                        }
+                        return Ok(Flow::Return);
+                    }
+                    if stack.len() != pre {
+                        if owned {
+                            free_value(handle, KIND_LIST);
+                        }
+                        return Err(InterpretError::new(
+                            "for body must leave the stack balanced",
+                            span,
+                            "E325",
+                        ));
+                    }
+                }
+                if owned {
+                    free_value(handle, KIND_LIST);
+                }
+            }
             other => {
                 other.drop_owned();
-                return Err(InterpretError::unsupported("non-array iterable for", span));
-            }
-        };
-        for (i, elem) in elems.into_iter().enumerate() {
-            while stack.len() > pre {
-                stack.pop().unwrap().drop_owned();
-            }
-            let elem_slot = Slot {
-                kind: infer_value_kind(&elem),
-                value: elem,
-            };
-            frame.loops.push(LoopCtx {
-                value: Some(elem_slot),
-                index: Some(i as i64),
-            });
-            let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
-            if let Some(ctx) = frame.loops.pop()
-                && let Some(v) = ctx.value
-            {
-                v.drop_owned();
-            }
-            if flow == Flow::Return {
-                return Ok(Flow::Return);
-            }
-            if stack.len() != pre {
                 return Err(InterpretError::new(
-                    "for body must leave the stack balanced",
+                    "'for' requires an array or list iterable",
                     span,
-                    "E325",
+                    "E394",
                 ));
             }
         }
@@ -1933,12 +2000,11 @@ impl Interpreter {
                 let elem_size = kind_elem_size(elem_kind);
                 let handle = runtime::yarrow_list_new(u64::from(elem_size));
                 for v in values {
-                    let bits = v.value.as_bits().ok_or_else(|| {
-                        InterpretError::unsupported("array element in list", span)
-                    })?;
+                    let bits = v.value.as_bits().unwrap_or(0);
                     // Transfer ownership into the list; don't free the slot.
                     match v.value {
-                        Value::Str { .. } | Value::Heap { .. } => {}
+                        Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
+                        Value::Array(_) => {}
                         other => other.drop_owned(),
                     }
                     runtime::yarrow_list_push(handle, bits);
@@ -1969,20 +2035,14 @@ impl Interpreter {
                 let keys_string = u64::from(key_kind == KIND_STRING);
                 let handle = runtime::yarrow_map_new(keys_string);
                 for (k, v) in evaluated {
-                    let kb = k
-                        .value
-                        .as_bits()
-                        .ok_or_else(|| InterpretError::unsupported("complex map key", span))?;
-                    let vb = v
-                        .value
-                        .as_bits()
-                        .ok_or_else(|| InterpretError::unsupported("complex map value", span))?;
+                    let kb = k.value.as_bits().unwrap_or(0);
+                    let vb = v.value.as_bits().unwrap_or(0);
                     match k.value {
-                        Value::Str { .. } | Value::Heap { .. } => {}
+                        Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
                         other => other.drop_owned(),
                     }
                     match v.value {
-                        Value::Str { .. } | Value::Heap { .. } => {}
+                        Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
                         other => other.drop_owned(),
                     }
                     runtime::yarrow_map_insert(handle, kb, vb);
@@ -1996,9 +2056,10 @@ impl Interpreter {
                 });
                 Ok(())
             }
-            Expr::EmptyMapOrStruct => Err(InterpretError::unsupported(
-                "empty `{}` without a typed binding",
+            Expr::EmptyMapOrStruct => Err(InterpretError::new(
+                "empty `{}` requires a typed context (e.g., variable declaration)",
                 span,
+                "E395",
             )),
             Expr::ApplyBorrow | Expr::Borrow { .. } => {
                 let s = self.pop(stack, span, "'borrow'")?;
@@ -2134,11 +2195,25 @@ impl Interpreter {
                 };
                 Ok((handle, sid))
             }
+            KIND_UNION => {
+                let uid = (base.kind >> 8) as u32;
+                let handle = match &base.value {
+                    Value::Heap { handle, .. } => *handle,
+                    _ => {
+                        return Err(InterpretError::new(
+                            "union field access requires a heap handle",
+                            span,
+                            "E340",
+                        ));
+                    }
+                };
+                Ok((handle, uid))
+            }
             KIND_PTR => {
                 let pointee = base.kind >> 8;
-                if (pointee & 0xff) != KIND_STRUCT {
+                if (pointee & 0xff) != KIND_STRUCT && (pointee & 0xff) != KIND_UNION {
                     return Err(InterpretError::new(
-                        "cannot access field through a non-struct pointer",
+                        "cannot access field through a non-struct/non-union pointer",
                         span,
                         "E340",
                     ));
@@ -2157,7 +2232,7 @@ impl Interpreter {
                 Ok((addr, sid))
             }
             _ => Err(InterpretError::new(
-                "cannot access field on non-struct",
+                "cannot access field on non-struct/non-union",
                 span,
                 "E340",
             )),
@@ -2388,16 +2463,12 @@ impl Interpreter {
                         ));
                     }
                 };
-                let bits = match value.value.as_bits() {
-                    Some(b) => b,
-                    None => {
-                        value.drop_owned();
-                        return Err(InterpretError::unsupported("list element", span));
-                    }
-                };
+                let bits = value.value.as_bits().unwrap_or(0);
                 // Transfer ownership of heap bits into the list storage.
                 match value.value {
-                    Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
+                    Value::Str { owned: true, .. }
+                    | Value::Heap { owned: true, .. }
+                    | Value::Array(_) => {}
                     other => other.drop_owned(),
                 }
                 runtime::yarrow_list_push(handle, bits);
