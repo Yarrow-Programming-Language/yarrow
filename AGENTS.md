@@ -17,29 +17,24 @@ Build and maintain the Yarrow programming language implementation, following the
 - Do not write tests unless the user explicitly asks. Tests come later.
 - Treat `docs/GRAMMAR.md` as authoritative.
 - When spec and code diverge, follow the plan's tasks to close the gap.
-- Keep the safe vs unsafe boundary strict:
-  - Safe: ownership, borrow, regions, stack effects, types.
-  - `unsafe function` / `unsafe ... end` only allow explicitly unsafe operations (raw pointers, etc.). They do not disable borrow or ownership checking.
-- Do not invent lifetime syntax (`reference<'a, T>`). Ownership and regions are the model.
-- Module imports use the form `"path" [scope] require` (keyword last).
-- In comments and documentation, never use `—`.
+- In general, never use em dashs `—`.
 
 ## Preferences
 
-- Prefer minimal, focused changes that pass the relevant PLAN gate.
 - Prefer clear prose, short lists, and linked tables of contents over ASCII tree or box-drawing diagrams. Use a diagram only when it is the simplest accurate explanation.
 - Even if a prompt is written in a certain language, generated code, comments, and documentation must be in English; only the agent's response text should be in the prompt's language.
 - Avoid using tables unless they are the best way to represent the information; keep information simple to read and understand when possible.
+- When a change request can be generalized as a rule, prefer adding it to the relevant .agents/skills/ SKILL.md rather than appending to AGENTS.md. AGENTS.md should stay small and universal; domain-specific conventions belong in skills so they load only when needed. Create a new skill when no existing one fits.
 
 ## Workflow
 
 Run the following commands to verify changes:
 
 ```bash
-cargo fmt --all
-cargo check
-cargo clippy
-cargo run -- <file.yar>
+cargo fmt --all # To format the file
+cargo check # First check
+cargo clippy # Second check
+cargo run -- <file.yar> # Run the file to test it
 ```
 
 ## Resources

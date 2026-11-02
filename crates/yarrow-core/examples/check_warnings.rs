@@ -52,14 +52,21 @@ fn main() {
     let dead = check_fixture(repo, "docs/examples/valid/18_unreachable_warnings.yar");
     expect_codes(&dead, "18_unreachable_warnings.yar", &["W407"]);
 
-    let ambig = check_fixture(repo, "docs/examples/valid/19_require_ambiguous_warnings.yar");
+    let ambig = check_fixture(
+        repo,
+        "docs/examples/valid/19_require_ambiguous_warnings.yar",
+    );
     expect_codes(&ambig, "19_require_ambiguous_warnings.yar", &["W406"]);
 
     let empty_match = check_fixture(repo, "docs/examples/valid/20_empty_match_warnings.yar");
     expect_codes(&empty_match, "20_empty_match_warnings.yar", &["W408"]);
 
     let empty_ctrl = check_fixture(repo, "docs/examples/valid/21_empty_if_unsafe_warnings.yar");
-    expect_codes(&empty_ctrl, "21_empty_if_unsafe_warnings.yar", &["W409", "W410"]);
+    expect_codes(
+        &empty_ctrl,
+        "21_empty_if_unsafe_warnings.yar",
+        &["W409", "W410"],
+    );
 
     println!("ok: W401–W410 warning fixtures");
 }

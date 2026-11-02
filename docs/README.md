@@ -30,10 +30,3 @@ Prefer the grammar when an example and the unfinished compiler disagree.
 3. [Type system](TYPE_SYSTEM.md) and [Memory model](MEMORY_MODEL.md) for checking rules
 4. [Runtime](RUNTIME.md) for modules, host ABI, and execution shape
 5. [Style guide](STYLE_GUIDE.md) before writing or formatting larger programs
-
----
-
-## Document Standards
-
-- Project AGENTS.md files follow the [agents.md](https://github.com/agentsmd/agents.md) specification
-- Implementation plans in `crates/**/PLAN.md` follow the [plan.md](https://github.com/Digital-Tvilling/plan.md) specification
