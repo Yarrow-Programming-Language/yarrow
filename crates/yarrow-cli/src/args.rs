@@ -4,13 +4,12 @@ use std::ffi::OsString;
 
 use clap::{Parser, Subcommand};
 
-/// Yarrow language compiler and runner.
+/// Yarrow language interpreter and tools.
 #[derive(Debug, Parser)]
 #[command(
     name = "yarrow",
-    about = "Yarrow language compiler",
+    about = "Yarrow language interpreter and tools",
     version,
-    // `yarrow <file>` is sugar for `yarrow run <file>`.
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -18,7 +17,7 @@ pub struct Cli {
     pub global: GlobalArgs,
 
     /// Optional default positional. When present and no subcommand is
-    /// provided, it is treated as `run <FILE>`.
+    /// provided, it is interpreted using the stack VM.
     #[arg(value_name = "FILE")]
     pub file: Option<std::path::PathBuf>,
 
@@ -114,15 +113,8 @@ impl ColorArg {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    /// Compile and run a Yarrow source file.
-    ///
-    /// This is also the default when you pass a file directly:
-    /// `yarrow file.yar` is sugar for `yarrow run file.yar`.
-    ///
-    /// Program arguments go after `--` (for example
-    /// `yarrow run file.yar -- arg1 arg2`). With the default
-    /// `--target object` they are the child process argv. JIT has no
-    /// language-level argv API yet; non-empty args are rejected.
+    #[command(hide = true)]
+    /// Compile and run a Yarrow source file (compiler - hidden).
     Run {
         /// Source file to compile and run.
         #[arg(value_name = "FILE")]
@@ -141,13 +133,8 @@ pub enum Cmd {
         program_args: Vec<OsString>,
     },
 
-    /// Check + codegen without running the entry.
-    ///
-    /// Default `--target object` writes a native artifact next to the cwd:
-    /// `--emit object` (default) → `./<stem>.o`; `--emit exe` → `./<stem>`.
-    /// `-o PATH` overrides; only that path is the artifact. Successful writes
-    /// are recorded in `.yarrow-build/artifacts` for `yarrow clean`.
-    /// `--target jit` finalizes JIT code in-process (no file written).
+    #[command(hide = true)]
+    /// Compile a Yarrow source file (compiler - hidden).
     Compile {
         /// Source file to compile.
         #[arg(value_name = "FILE")]
@@ -180,20 +167,8 @@ pub enum Cmd {
     /// removed unless they appear in the manifest.
     Clean,
 
-    /// Check source without running `main`.
-    ///
-    /// One file uses a single-file session. Two or more paths are a multi-root
-    /// project check (`ProjectOptions` / `check_project`): shared `-L` search
-    /// paths, each root still its own compilation unit. No manifest.
-    ///
-    /// `--corpus DIR` checks every immediate `*.yar` in that directory
-    /// (non-recursive; nested helpers are not separate roots). Aggregates:
-    /// exit `0` if all succeed, `1` if any program diagnostics. Prints
-    /// `N ok, M failed` unless `-q`. This is a corpus driver, not a
-    /// language-level test framework.
-    ///
-    /// Example: `yarrow check root_a.yar root_b.yar`
-    /// Example: `yarrow check --corpus docs/examples/valid`
+    #[command(hide = true)]
+    /// Check source without running main (compiler - hidden).
     Check {
         /// Root `.yar` file(s). One path → single-file check; two or more →
         /// project check. Required unless `--corpus` is set.
@@ -214,13 +189,10 @@ pub enum Cmd {
         main: String,
     },
 
-    /// Check and interpret a Yarrow source file (no machine code).
+    /// Execute a Yarrow source file on the stack VM interpreter.
     ///
-    /// Executes the entry (`main` or `--main`) on the stack VM. There is no
-    /// `--target` on this command; use `run` / `compile` for JIT or object.
-    ///
-    /// Program arguments after `--` are accepted by clap but rejected until
-    /// core exposes an interpret argv API.
+    /// Executes the entry (`main` or `--main`) without compiling to machine code.
+    /// This is the default action when passing a file directly to yarrow.
     Interpret {
         /// Source file to interpret.
         #[arg(value_name = "FILE")]
@@ -336,12 +308,11 @@ pub enum Cmd {
     /// Print the CLI version.
     Version,
 
-    /// Print an intermediate representation and exit (no run).
+    #[command(hide = true)]
+    /// Print an intermediate representation and exit (compiler - hidden).
     Dump {
-        /// Source file to dump.
         #[arg(value_name = "FILE")]
         file: std::path::PathBuf,
-        /// Intermediate to print (`tokens`, `ast`, or `ir`).
         #[arg(long, value_enum, default_value = "ir")]
         emit: EmitKind,
     },

@@ -96,8 +96,8 @@ fn dispatch(cli: Cli) -> ExitCode {
             None,
         ) => commands::run_file(&file, target, &main, &program_args, &cli.global),
         (None, Some(file)) => {
-            // `yarrow <file>` is sugar for `yarrow run --target object <file>`.
-            commands::run_file(&file, TargetKind::Object, "main", &[], &cli.global)
+            // `yarrow <file>` now uses the interpreter by default.
+            commands::interpret_file(&file, "main", &[], &cli.global)
         }
         (
             Some(Cmd::Compile {
@@ -218,7 +218,7 @@ fn dispatch(cli: Cli) -> ExitCode {
             // `arg_required_else_help` isn't enough once everything is optional.
             // Print a concise usage and keep exit code consistent.
             eprintln!(
-                "usage: yarrow <file.yar>\n       yarrow run [--target jit|object] <file.yar> [-- ARGS...]\n       yarrow compile [--target jit|object] <file.yar>\n       yarrow check <file.yar> [file.yar...]\n       yarrow check --corpus <dir>\n       yarrow interpret <file.yar> [-- ARGS...]\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow clean"
+                "usage: yarrow <file.yar>\n       yarrow interpret <file.yar>\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow clean\n\n       (Hidden compiler commands: run, compile, check, dump)"
             );
             ExitCode::from(2)
         }
