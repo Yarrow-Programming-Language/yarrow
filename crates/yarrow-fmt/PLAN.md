@@ -33,144 +33,6 @@ Based on schema [SCHEMA.md](SCHEMA.md).
 
 ---
 
-## Scope
-
-### In Scope
-
-- **Name:** Mechanical Rewrite
-  **Description:** Mechanical rewrite of parseable source
-  **Status:** landed
-
-- **Name:** Source File Hygiene
-  **Description:** UTF-8, LF, no trailing whitespace, final newline
-  **Status:** landed
-
-- **Name:** Indentation
-  **Description:** One tab per nesting level; no space indent
-  **Status:** landed
-
-- **Name:** Soft Wrap
-  **Description:** Soft wrap target: 100 columns (break before consuming words); `FormatOptions::max_width` / `--max-width`
-  **Status:** landed
-
-- **Name:** Blank Line Rules
-  **Description:** Blank-line rules between top-level items and inside bodies
-  **Status:** landed
-
-- **Name:** Construct Layout
-  **Description:** Layout for `require`, types, `implement`, functions, `if`/`match`/`for`/`defer`/`unsafe`, calls, containers
-  **Status:** landed
-
-- **Name:** Comment Preservation
-  **Description:** Comment text preserved; spacing around `#` normalized where the guide is explicit (`# ` after hash; one space before trailing `#`)
-  **Status:** landed
-
-- **Name:** Require Sorting
-  **Description:** Opt-in file-layout reorder; require sorting on by default (`--no-sort-requires` to disable)
-  **Status:** landed
-
-- **Name:** Incomplete Parse
-  **Description:** Best-effort hygiene on incomplete parse; selective construct reprint when recovery spans are trustworthy
-  **Status:** landed
-
-- **Name:** Ignore Regions
-  **Description:** Diff-friendly ignore regions via `# yarrow-fmt-ignore-begin` / `# yarrow-fmt-ignore-end`
-  **Status:** landed
-
-- **Name:** Parallel Processing
-  **Description:** Parallel multi-file driver
-  **Status:** landed
-
-- **Name:** CLI Range Mode
-  **Description:** `--range START:END` prints `format_range` edit encoding
-  **Status:** landed
-
-### Out of Scope
-
-- **Name:** Renaming
-  **Description:** Naming is style/lint, not rewrite; core warnings / future lint
-  **Status:** out_of_scope
-
-- **Name:** Idiom Rewrites
-  **Description:** Semantic / teachable; not silent format
-  **Status:** out_of_scope
-
-- **Name:** Type-check / Borrow Fixes
-  **Description:** Compiler / `yarrow check`
-  **Status:** out_of_scope
-
-- **Name:** Tabs vs Spaces Config
-  **Description:** Style guide fixes tabs; formatter always emits tabs
-  **Status:** out_of_scope
-
-- **Name:** Editor Format-on-save
-  **Description:** Editor / LSP client; server already exposes full-doc format
-  **Status:** out_of_scope
-
-**Idempotence:** `format(format(src)) == format(src)` for accepted inputs (fully parsed subset only when best-effort).
-
----
-
-## Architecture
-
-```text
-source (.yar)
-  -> comment tokens (yarrow-core; whitespace rebuilt in printer)
-  -> parse / parse_recovering (yarrow-core)
-  -> format IR (AST + TriviaMap)
-  -> printer (STYLE_GUIDE rules: construct -> phrase wrap -> indent -> blanks -> hygiene)
-    or hygiene-only / selective reprint when parse incomplete (format_source_best_effort)
-      ignore regions restored from hygiened original after layout
-  -> UTF-8 string / write back
-
-multi-file run_fmt: independent paths formatted in parallel (rayon);
-  reporting / writes stay sorted-path order; stdin and single-file stay sequential
-
---range START:END: format_range -> yarrow-fmt-range-v1 stdout encoding
-  (no file write); editors keep using LSP rangeFormatting
-```
-
-### Public Surface
-
-```rust
-pub struct FormatOptions {
-    pub max_width: usize,       // default 100; CLI rejects below MIN_MAX_WIDTH (20); library clamps
-    pub sort_requires: bool,    // default true; --no-sort-requires to preserve order
-    pub reorder_layout: bool,   // default false (opt-in)
-}
-
-pub const MIN_MAX_WIDTH: usize = 20;
-pub const DEFAULT_MAX_WIDTH: usize = 100;
-
-pub enum FormatError { Io, NotUtf8, Parse }
-
-pub struct FormattedSource { pub text: String, pub best_effort: bool }
-
-pub fn format_source(source: &str, options: &FormatOptions) -> Result<String, FormatError>;
-pub fn format_source_best_effort(source: &str, options: &FormatOptions) -> Result<FormattedSource, FormatError>;
-pub fn format_file(path: &Path, options: &FormatOptions) -> Result<String, FormatError>;
-
-pub struct FmtInput { /* options, check, stdin, best_effort, range, paths */ }
-pub fn run_fmt(program: &str, input: FmtInput) -> ExitCode;
-```
-
-### CLI
-
-- **Default:** Format files in place
-- **`--check`:** Exit non-zero if any file would change
-- **`--stdin`:** Read stdin, write formatted stdout
-- **`--max-width N`:** Soft wrap width (default 100; min 20)
-- **`--sort-requires`:** Force-on require sorting (default already on)
-- **`--no-sort-requires`:** Keep top-level require source order
-- **`--reorder-layout`:** Opt-in top-level file-layout reorder
-- **`--best-effort`:** On parse failure, hygiene (and selective reprint)
-- **`--range START:END`:** Byte-span edit encoding to stdout
-- **Paths / Dirs:** `.yar` files; recurse directories
-
-**Exit codes:** `0` ok / already formatted (`--check`), `1` would reformat or parse/format failure, `2` usage / I/O.
-
----
-
 ## Current State
 
 ### Landed Features
@@ -269,31 +131,6 @@ pub fn run_fmt(program: &str, input: FmtInput) -> ExitCode;
 
 **Gates:** `./scripts/fmt-check.sh` (or `yarrow fmt --check` on the Stage 21 path set) exits `0`; `cargo fmt && cargo check && cargo clippy` green for `yarrow_fmt` / `yarrow_cli`.
 
----
-
-## Mapping: Style Guide to Stages
-
-| Style Guide Section                    | Status                                        |
-| -------------------------------------- | --------------------------------------------- |
-| Principles                             | Design only                                   |
-| Source files                           | Landed                                        |
-| Indentation and line width             | Landed                                        |
-| Blank lines                            | Landed                                        |
-| Comments                               | Landed; ignore markers done                   |
-| Naming                                 | Out of scope (core / lint)                    |
-| File layout (order)                    | Landed (opt-in)                               |
-| Modules and require                    | Landed                                        |
-| Visibility                             | Landed (print as written); order via Stage 13 |
-| Types / Functions / Variables          | Landed                                        |
-| Stack phrases and operators            | Landed                                        |
-| Literals and containers                | Landed                                        |
-| Control flow / Defer / Unsafe / Errors | Landed                                        |
-| Ownership / Stack hygiene              | Out of scope (semantics)                      |
-| Checklist                              | Landed layout rows; naming rows ignored       |
-| Tooling / ignore                       | Done; CLI `--range` done                      |
-
----
-
 ## Phases
 
 ### Phase 0-22
@@ -346,8 +183,6 @@ pub fn run_fmt(program: &str, input: FmtInput) -> ExitCode;
   - **Description:** Test with editor workflows
 - **Gate:** On-type formatting works in LSP; full document format unchanged. `cargo clippy` green.
 
----
-
 ### Stage 25 - Format Config File
 
 - **Number:** 25
@@ -361,8 +196,6 @@ pub fn run_fmt(program: &str, input: FmtInput) -> ExitCode;
   - **Description:** Implement config file discovery and parsing
   - **Description:** Allow overrides via CLI flags
 - **Gate:** Config file works; CLI flags still override. `cargo clippy` green.
-
----
 
 ### Stage 26 - Incremental / Cached IR
 

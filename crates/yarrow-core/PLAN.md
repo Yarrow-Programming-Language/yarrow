@@ -95,7 +95,7 @@ Based on schema [SCHEMA.md](SCHEMA.md).
 
 ---
 
-## Multi-platform Compilation Status
+## Platform Support
 
 ### Platform Targets
 

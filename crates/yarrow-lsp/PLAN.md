@@ -35,9 +35,9 @@ Based on schema [SCHEMA.md](SCHEMA.md).
 
 ---
 
-## Scope
+## Current State
 
-### Landed Features (v1, Stages 0-19, 21-26)
+### Landed Features
 
 - **Name:** Protocol Support
   **Description:** stdio Language Server Protocol (LSP 3.17-shaped) + TCP `--listen host:port` transport (one client) + in-repo protocol harness
@@ -119,9 +119,7 @@ Based on schema [SCHEMA.md](SCHEMA.md).
   **Description:** Virtual `yarrow-std:` URIs when on-disk `lib/std` is missing (Stage 26)
   **Status:** landed
 
-**Note:** Stage 20 (editor extension packaging) was **canceled**; clients live in separate repos.
-
-### Out of Scope
+### Known Gaps
 
 - **Name:** Package Manager
   **Description:** Language has no project file; roots are explicit paths only
@@ -146,129 +144,6 @@ Based on schema [SCHEMA.md](SCHEMA.md).
 - **Name:** Editor Extensions
   **Description:** Editor extensions (VS Code / Zed / ...): Live in separate repos later; not in the main compiler tree
   **Status:** out_of_scope
-
-**Transport:** stdio is the default. TCP (`--listen`) is for tests / remote clients.
-
----
-
-## Architecture
-
-```text
-editor  <--stdio JSON-RPC-->  yarrow-lsp
-                            -> DocumentStore (uri -> text + version)
-                            -> Analysis (Session::parse_source / check_source
-                                         / check_project when multi-root)
-                            -> PositionMap (LSP <-> core Span / SourceFile)
-                            -> Features (diag, hover, def, refs, symbols, complete,
-                                         format, codeAction, signature, inlay, ...)
-                            -> yarrow_core::Session
-                            -> yarrow_fmt::format_source / format_range
-```
-
-### Public / Binary Surface
-
-```rust
-pub async fn run_stdio() -> Result<(), LspError>;
-pub async fn run_stdio_with(config: LspConfig) -> Result<(), LspError>;
-pub fn run_stdio_blocking() -> Result<(), LspError>;
-pub async fn run_tcp_with(addr, config, on_listen) -> Result<(), LspError>;
-pub fn run_tcp_blocking(addr, config, on_listen) -> Result<(), LspError>;
-// Shared by stdio and TCP.
-pub async fn run_with_streams(/* ... */) -> Result<(), LspError>;
-```
-
-**Protocol Stack:**
-
-- LSP types: via `tower-lsp-server` (community fork of `tower-lsp`)
-- Runtime: `tokio`
-- Binary: `crates/yarrow-lsp` + `yarrow lsp`
-
-**Rule:** Do **not** shell out to `yarrow check`; call `Session` in-process.
-
-### Position Mapping
-
-LSP positions are UTF-16 code units by default (or UTF-8 if negotiated). Core `Span` / `SourceFile::location` use **byte offsets** and Unicode scalar columns.
-
-1. `PositionMap` converts `Span` <-> `lsp::Range`
-2. Prefer negotiating `positionEncoding = utf-8` when the client supports it; still support UTF-16 for VS Code-class clients.
-
-### Analysis Model
-
-On `didOpen` / `didChange` (debounced):
-
-1. Update buffer text
-2. Build `CompileOptions` with `source_path` from URI, search paths from init options / workspace folders
-3. Call `check_source` (or `check_project` when Stage 21 multi-root mode applies)
-4. Map `DiagnosticBatch` -> `PublishDiagnosticsParams` (and answer pull requests)
-5. Cache last successful parse / check artifact for hover, navigation, inlays, tokens
-
-Open documents + transitive `require` resolution cover the single-file case. Multi-root project check is Stage 21 (core graph already exists).
-
----
-
-## Current State
-
-All v1 LSP stages (0-19, 21-26) are complete. Stage 20 (editor extensions) was canceled.
-
-### Landed Dependencies
-
-- **Crate:** yarrow-lsp
-  **Features:** Stages 0-19 + 21-26 landed
-
-- **Crate:** yarrow-core
-  **Features:** Session API: `parse_source` / `check_source` / `check_project` + spans
-
-- **Crate:** yarrow-core
-  **Features:** Core diagnostics: `Diagnostic` / `Severity` / codes / explain table
-
-- **Crate:** yarrow-core
-  **Features:** Typed hover data: `CheckedProgram::type_at` (core Stage 30)
-
-- **Crate:** yarrow-core
-  **Features:** Def / require probe: Core Stage 35 + LSP Stage 22 consume `definition_at`
-
-- **Crate:** yarrow-core
-  **Features:** Cross-file resolve: Probe + AST / `require`; project multi-root in Stage 21
-
-- **Crate:** yarrow-fmt
-  **Features:** Full-doc best-effort + `format_range`; on-type is local indent
-
-- **Crate:** yarrow-cli
-  **Features:** CLI `yarrow lsp`: In-process `run_stdio_blocking` / `--listen`
-
----
-
-## Feature Mapping
-
-LSP capability to stages:
-
-| Capability                         | Stage                                                                 |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| initialize / shutdown              | Stage 0                                                               |
-| textDocument sync                  | Stage 1                                                               |
-| publishDiagnostics                 | Stage 2; cancelation Stage 25                                         |
-| documentSymbol                     | Stage 3                                                               |
-| definition                         | Stage 4, 7, 22, 26 (probes; virtual std fallback)                     |
-| hover                              | Stage 5, 9, 22, 26 (AST; type_at; def/require; virtual std)           |
-| completion                         | Stage 6 (grammar keywords + AST names)                                |
-| references                         | Stage 7 (binding / name index)                                        |
-| formatting                         | Stage 8 (`yarrow-fmt`)                                                |
-| codeAction / explain               | Stage 11 (`explain_code`)                                             |
-| signatureHelp                      | Stage 12 (AST + type_at)                                              |
-| inlayHint                          | Stage 13 (TypeIndex probes)                                           |
-| semanticTokens                     | Stage 14 (tokens + AST)                                               |
-| rename                             | Stage 15 (references / resolve; file-local)                           |
-| workspaceSymbol                    | Stage 16; Stage 21 (open + requires; project roots via check_project) |
-| rangeFormatting / onTypeFormatting | Stage 17; Stage 23 (format_range; on-type = local indent after end)   |
-| textDocument/diagnostic (pull)     | Stage 18 (same as publish + uri/version cache)                        |
-| workspace/diagnostic               | Stage 24 (open / project roots only)                                  |
-| TCP + test harness                 | Stage 19 (transport only)                                             |
-| multi-root project check           | Stage 21 (check_project; core Stage 28)                               |
-| analysis cancelation / latency     | Stage 25 (gen tickets + spawn_blocking)                               |
-| virtual yarrow-std URIs            | Stage 26 (embedded std when on-disk missing)                          |
-| editor extensions                  | Stage 20 (canceled; separate repos)                                   |
-
----
 
 ## Phases
 
@@ -298,33 +173,33 @@ LSP capability to stages:
 
 ## Backlog
 
-- **Name:** Cross-module Silent Rename
-  **Description:** Explicitly refused; Stage 15 stays conservative
-  **Status:** out_of_scope
+### Stage 27 - Salsa / Full Incremental IR
 
+- **Number:** 27
 - **Name:** Salsa / Full Incremental IR
-  **Description:** Only if Stage 25 still too slow
-  **Status:** pending
-  **Priority:** low
+- **Description:** Only if Stage 25 still too slow
+- **Status:** pending
+- **Priority:** low
+- **Tasks:**
+  - **Description:** Profile analysis performance on large codebases
+  - **Description:** Evaluate if Salsa or similar incremental compilation is needed
+  - **Description:** If needed, design and implement incremental IR
+  - **Description:** Ensure correctness (output must be identical)
+- **Gate:** Performance evaluation complete; if implemented, output unchanged. `cargo clippy` green.
 
-- **Name:** DAP / Debug Adapter
-  **Description:** Separate product
-  **Status:** out_of_scope
+### Stage 28 - Call / Type Hierarchy
 
-- **Name:** Markdown / Embedded Yarrow
-  **Description:** Skip until requested
-  **Status:** out_of_scope
-
-- **Name:** Editor Extensions
-  **Description:** Separate repos (Stage 20 canceled here)
-  **Status:** out_of_scope
-
+- **Number:** 28
 - **Name:** Call / Type Hierarchy
-  **Description:** Needs richer core index; do not fake from names alone
-  **Status:** pending
-  **Priority:** low
-
----
+- **Description:** Needs richer core index; do not fake from names alone
+- **Status:** pending
+- **Priority:** low
+- **Tasks:**
+  - **Description:** Coordinate with `yarrow-core` on richer index needs
+  - **Description:** Implement call hierarchy based on core index
+  - **Description:** Implement type hierarchy based on core index
+  - **Description:** Ensure it does not fake from names alone
+- **Gate:** Call and type hierarchy work correctly with core index. `cargo clippy` green.
 
 ## Working Rules
 
