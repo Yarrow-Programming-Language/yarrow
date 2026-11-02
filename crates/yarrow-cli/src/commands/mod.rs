@@ -1,11 +1,9 @@
-mod clean;
 mod explain;
 mod fmt;
 mod interpret;
 mod lsp;
 mod repl;
 
-pub use clean::clean_artifacts;
 pub use explain::explain_code;
 pub use fmt::run_fmt_command;
 pub use interpret::interpret_file;

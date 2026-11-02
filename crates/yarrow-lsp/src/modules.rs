@@ -53,26 +53,6 @@ pub fn virtual_std_uri(module_path: &str) -> Option<Uri> {
     Uri::from_str(&format!("{STD_URI_SCHEME}:/{rel}")).ok()
 }
 
-/// Parse `yarrow-std:/io.yar` (or `yarrow-std:io.yar`) back to `std.io`.
-pub fn module_path_from_std_uri(uri: &Uri) -> Option<String> {
-    if uri.scheme().as_str() != STD_URI_SCHEME {
-        return None;
-    }
-    let mut path = uri.path().as_str().trim_start_matches('/');
-    // Opaque form `yarrow-std:io.yar` may put the name in path() differently;
-    // also accept the full URI after the scheme colon when path is empty.
-    if path.is_empty() {
-        let s = uri.as_str();
-        let rest = s.strip_prefix(&format!("{STD_URI_SCHEME}:"))?;
-        path = rest.trim_start_matches('/');
-    }
-    let stem = path.strip_suffix(".yar").unwrap_or(path);
-    if stem.is_empty() {
-        return None;
-    }
-    Some(format!("std.{}", stem.replace('/', ".")))
-}
-
 /// Whether `uri` uses the virtual std scheme.
 pub fn is_virtual_std_uri(uri: &Uri) -> bool {
     uri.scheme().as_str() == STD_URI_SCHEME

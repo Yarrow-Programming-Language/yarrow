@@ -42,7 +42,6 @@ yarrow [OPTIONS] [SUBCOMMAND]
 | `lsp`   | Start the Language Server Protocol server |
 | `explain` | Print the long form of a diagnostic code   |
 | `version` | Print the CLI version                     |
-| `clean`  | Remove CLI artifacts                      |
 
 ### Examples
 
@@ -145,14 +144,6 @@ Print the CLI version:
 yarrow version
 ```
 
-### `clean`
-
-Remove CLI artifacts (object files recorded by previous sessions):
-
-```bash
-yarrow clean
-```
-
 ## Environment Variables
 
 | Variable       | Description   | Default |
@@ -181,8 +172,7 @@ crates/yarrow-cli/
 │   │   ├── fmt.rs
 │   │   ├── lsp.rs
 │   │   ├── explain.rs
-│   │   ├── version.rs
-│   │   └── clean.rs
+│   │   └── version.rs
 │   └── main.rs         # Binary entry point
 └── Cargo.toml
 ```

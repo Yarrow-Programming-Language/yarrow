@@ -59,15 +59,6 @@ pub fn report_session_failure(diags: &SessionDiagnostics, color: ColorChoice) ->
     exit_for_session_failure(diags)
 }
 
-/// Exit for a single diagnostic (e.g. JIT `run_main` errors): ICE → `101`.
-pub fn exit_for_diagnostic(diag: &Diagnostic) -> ExitCode {
-    if diag.is_ice() {
-        ExitCode::from(EXIT_ICE)
-    } else {
-        ExitCode::from(1)
-    }
-}
-
 /// Format a caught panic payload for stderr (Stage 16).
 pub fn format_panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {

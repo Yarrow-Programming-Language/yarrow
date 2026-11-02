@@ -15,7 +15,6 @@
 //! ```
 
 mod args;
-mod artifacts;
 mod commands;
 mod diagnostics;
 
@@ -174,7 +173,6 @@ fn dispatch(cli: Cli) -> ExitCode {
                 )
             }
         }
-        (Some(Cmd::Clean), None) => commands::clean_artifacts(&cli.global),
         (Some(Cmd::Explain { code }), None) => commands::explain_code(&code, &cli.global),
         (Some(Cmd::Version), None) => {
             // Clap's built-in `--version` prints only the top-level crate version;
@@ -192,7 +190,7 @@ fn dispatch(cli: Cli) -> ExitCode {
             // `arg_required_else_help` isn't enough once everything is optional.
             // Print a concise usage and keep exit code consistent.
             eprintln!(
-                "usage: yarrow <file.yar>\n       yarrow interpret <file.yar>\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow clean\n       yarrow explain <code>\n       yarrow --version"
+                "usage: yarrow <file.yar>\n       yarrow interpret <file.yar>\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow explain <code>\n       yarrow --version"
             );
             ExitCode::from(2)
         }

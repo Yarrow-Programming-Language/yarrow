@@ -87,14 +87,6 @@ impl ColorArg {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    /// Remove artifacts recorded by this CLI's `compile`.
-    ///
-    /// Deletes only paths listed in `.yarrow-build/artifacts` (never a
-    /// recursive `*.o` wipe). Missing files or a missing manifest exit `0`.
-    /// Objects written outside this CLI (or before recording existed) are not
-    /// removed unless they appear in the manifest.
-    Clean,
-
     /// Execute a Yarrow source file on the stack VM interpreter.
     ///
     /// Executes the entry (`main` or `--main`) without compiling to machine code.

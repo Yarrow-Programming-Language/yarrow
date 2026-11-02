@@ -58,7 +58,6 @@ struct CallSite {
 #[derive(Debug, Clone)]
 struct FnSig {
     name: String,
-    name_span: Span,
     scope: Span,
     signature: String,
     parameters: Vec<ParameterInformation>,
@@ -189,35 +188,20 @@ fn collect_stmt(source: &str, stmt: &Stmt, scope: Span, out: &mut Vec<FnSig>) {
 }
 
 fn push_fn(
-    source: &str,
-    item_span: Span,
+    _source: &str,
+    _item_span: Span,
     scope: Span,
     f: &Function,
     implement_target: Option<&str>,
     out: &mut Vec<FnSig>,
 ) {
-    let Some(name_span) = name_span_in(source, item_span, &f.name) else {
-        return;
-    };
     let (signature, parameters) = format_signature(f, implement_target);
     out.push(FnSig {
         name: f.name.clone(),
-        name_span,
         scope,
         signature,
         parameters,
     });
-}
-
-fn name_span_in(source: &str, span: Span, name: &str) -> Option<Span> {
-    if name.is_empty() || span.lo > span.hi || span.hi > source.len() {
-        return None;
-    }
-    let slice = &source[span.lo..span.hi];
-    let rel = slice.find(name)?;
-    let lo = span.lo + rel;
-    let hi = lo + name.len();
-    Some(Span::new(lo, hi))
 }
 
 fn resolve<'a>(decls: &'a [FnSig], name: &str, offset: usize) -> Option<&'a FnSig> {

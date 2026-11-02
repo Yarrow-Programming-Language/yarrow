@@ -187,7 +187,7 @@ fn collect_workspace_from_text(
             StmtKind::Require { path: req, .. } => {
                 if let Some(queue) = require_queue.as_mut()
                     && let Some(target) =
-                        modules::resolve_require_file(path, &req, &config.search_paths)
+                        modules::resolve_require_file(path, req, &config.search_paths)
                     && let Some(disk) = target.path
                 {
                     queue.push(disk);
