@@ -94,51 +94,6 @@ not mutually.",
 or unreadable. Supply existing paths or in-memory `ProjectRoot` sources.",
     },
     ExplainEntry {
-        code: "E394",
-        title: "system linker or CRT missing",
-        body: "\
-Native executable emit links the program object with the runtime archive for \
-the selected target using a system linker (`ld` / `lld`). Yarrow does not drive \
-`cc` / `gcc` / `clang` to compile CRT or user code.
-
-Install binutils `ld` or LLVM `lld`, and ensure libc CRT objects for the target \
-are visible (on NixOS, a stdenv with glibc). Path discovery may use \
-`cc -print-file-name` when present; that is lookup only. For a non-host triple, \
-set `YARROW_AOT_SYSROOT` or `YARROW_AOT_CRT_DIR`, or install a matching cross \
-toolchain (see docs/RUNTIME.md).",
-    },
-    ExplainEntry {
-        code: "E395",
-        title: "native link failed",
-        body: "\
-The system linker ran but failed to produce an executable. Check the linker \
-message for missing libraries or CRT objects. Fix the host link environment; \
-do not fall back to JIT for `--target object`.",
-    },
-    ExplainEntry {
-        code: "E396",
-        title: "runtime archive unavailable",
-        body: "\
-AOT link needs `libyarrow_runtime_aot` for the selected target triple. Rebuild \
-`yarrow-core` so `YARROW_RUNTIME_AOT_ARCHIVE` (host) or the Stage 26 / 33 / 34 \
-archive table points at a non-empty archive, or set \
-`YARROW_RUNTIME_AOT_ARCHIVE_<triple_with_underscores>` to an archive built with \
-`cargo build -p yarrow_runtime_aot --target <triple>` (same ABI as the host \
-runtime; see docs/RUNTIME.md).",
-    },
-    ExplainEntry {
-        code: "E397",
-        title: "unsupported or invalid AOT target",
-        body: "\
-Object emit accepts linux-gnu / linux-musl (`x86_64` / `aarch64`), \
-`x86_64-pc-windows-gnu` (COFF), and `x86_64-apple-darwin` / \
-`aarch64-apple-darwin` (Mach-O). Executable link covers linux-gnu / linux-musl \
-on linux-gnu hosts, plus Windows-gnu host→host on a Windows-gnu toolchain \
-(Stage 39). Mach-O and non-host Windows stay object-only for now. Other triples \
-(MSVC, WASM, ...) are rejected. JIT requires the host triple. Set \
-`CompileOptions::target` to a supported value or leave it unset for the host.",
-    },
-    ExplainEntry {
         code: "E999",
         title: "internal compiler error (ICE)",
         body: "\

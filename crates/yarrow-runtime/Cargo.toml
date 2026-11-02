@@ -6,10 +6,5 @@ edition = "2024"
 [lib]
 crate-type = ["rlib"]
 
-[features]
-default = []
-# Linker-visible names for AOT (`yarrow_runtime_aot` staticlib only).
-aot-exports = []
-
 [dependencies]
 libc = "0.2"

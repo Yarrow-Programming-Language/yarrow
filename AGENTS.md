@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Yarrow is a typed, stack-based programming language with ownership, borrow checking, regions, and an explicit `unsafe` boundary. Implemented in Rust; Cranelift JIT, object emit, and host executable link.
+Yarrow is a typed, stack-based programming language with ownership, borrow checking, regions, and an explicit `unsafe` boundary. Implemented in Rust; interpreter-only.
 
 ## Role
 
@@ -41,9 +41,8 @@ cargo run -- <file.yar> # Run the file to test it
 
 ### Project layout
 
-- `crates/yarrow-core`: Core compiler crate. Contains tokenizer, parser, compiler, and session (Cranelift JIT, object emit, interpret).
+- `crates/yarrow-core`: Core interpreter crate. Contains tokenizer, parser, and session (interpret).
 - `crates/yarrow-runtime`: Host heap and `HOST_FNS` (rlib).
-- `crates/yarrow-runtime/aot`: AOT staticlib for ahead-of-time compilation.
 - `crates/yarrow-cli`: CLI driver (Clap). Modules resolve relative to the source file.
 - `crates/yarrow-fmt`: Code formatter and style guide.
 - `crates/yarrow-lsp`: Language server implementation.

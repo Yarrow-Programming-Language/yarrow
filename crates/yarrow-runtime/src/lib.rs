@@ -145,77 +145,15 @@ static UNION_DESCS: std::sync::LazyLock<Mutex<HashMap<u32, Vec<u64>>>> =
 // Heap
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "alloc"))]
 pub extern "C" fn yarrow_alloc(size: u64) -> u64 {
     unsafe { libc::malloc(size as usize) as u64 }
 }
 
 /// Host `free` for `@free` / drop paths.
-///
-/// Under `aot-exports` this is exported as the linker symbol `free`. Calling
-/// `libc::free` from that body would recurse into this same symbol, so on
-/// glibc we forward to `__libc_free` instead. On Windows we resolve UCRT
-/// `free` via `GetProcAddress` for the same reason. Internal `libc::free`
-/// calls elsewhere bind to this export and then reach the CRT through this
-/// trampoline.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "free"))]
 pub extern "C" fn yarrow_free(ptr: u64) {
     unsafe {
-        #[cfg(all(feature = "aot-exports", target_os = "linux", target_env = "gnu"))]
-        {
-            unsafe extern "C" {
-                fn __libc_free(ptr: *mut libc::c_void);
-            }
-            __libc_free(ptr as *mut libc::c_void);
-        }
-        #[cfg(all(feature = "aot-exports", target_os = "windows"))]
-        {
-            windows_crt_free(ptr as *mut libc::c_void);
-        }
-        #[cfg(not(any(
-            all(feature = "aot-exports", target_os = "linux", target_env = "gnu"),
-            all(feature = "aot-exports", target_os = "windows"),
-        )))]
-        {
-            libc::free(ptr as *mut libc::c_void);
-        }
+        libc::free(ptr as *mut libc::c_void);
     }
-}
-
-/// Resolve UCRT `free` at runtime so our exported `free` does not recurse.
-#[cfg(all(feature = "aot-exports", target_os = "windows"))]
-unsafe fn windows_crt_free(ptr: *mut libc::c_void) {
-    use std::sync::OnceLock;
-    type FreeFn = unsafe extern "C" fn(*mut libc::c_void);
-    static REAL_FREE: OnceLock<FreeFn> = OnceLock::new();
-
-    unsafe extern "system" {
-        fn LoadLibraryA(name: *const u8) -> *mut core::ffi::c_void;
-        fn GetProcAddress(
-            module: *mut core::ffi::c_void,
-            name: *const u8,
-        ) -> *mut core::ffi::c_void;
-    }
-
-    let f = *REAL_FREE.get_or_init(|| unsafe {
-        // Prefer UCRT (MSYS2 UCRT64 / modern Rust). Fall back to msvcrt for
-        // older mingw64 toolchains so malloc/free stay on one CRT.
-        let mut module = LoadLibraryA(c"ucrtbase.dll".as_ptr().cast());
-        if module.is_null() {
-            module = LoadLibraryA(c"msvcrt.dll".as_ptr().cast());
-        }
-        assert!(
-            !module.is_null(),
-            "LoadLibraryA(ucrtbase.dll|msvcrt.dll) failed for free trampoline"
-        );
-        let sym = GetProcAddress(module, c"free".as_ptr().cast());
-        assert!(
-            !sym.is_null(),
-            "GetProcAddress(free) failed for free trampoline"
-        );
-        core::mem::transmute::<*mut core::ffi::c_void, FreeFn>(sym)
-    });
-    f(ptr);
 }
 
 /// Detach `handle` from whatever region it is attached to (no-op if none).
@@ -255,7 +193,6 @@ fn mark_freed(handle: u64) {
 
 /// Build a string from a byte buffer (copied; must not be freed by the
 /// caller). Returns a handle to the header.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "str_new"))]
 pub extern "C" fn yarrow_str_new(ptr: u64, len: u64) -> u64 {
     let buf = unsafe { libc::malloc(len as usize + 1) } as *mut u8;
     unsafe {
@@ -272,7 +209,6 @@ pub extern "C" fn yarrow_str_new(ptr: u64, len: u64) -> u64 {
     hdr as u64
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "str_len"))]
 pub extern "C" fn yarrow_str_len(s: u64) -> u64 {
     unsafe { (*(s as *const Str)).len as u64 }
 }
@@ -289,7 +225,6 @@ pub fn string_bytes(s: u64) -> Option<Vec<u8>> {
     }
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "str_join"))]
 pub extern "C" fn yarrow_str_join(a: u64, b: u64) -> u64 {
     unsafe {
         let sa = &*(a as *const Str);
@@ -308,7 +243,6 @@ pub extern "C" fn yarrow_str_join(a: u64, b: u64) -> u64 {
 }
 
 /// Lexicographic comparison: -1, 0 or 1.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "str_cmp"))]
 pub extern "C" fn yarrow_str_cmp(a: u64, b: u64) -> i64 {
     unsafe {
         let sa = &*(a as *const Str);
@@ -341,7 +275,6 @@ fn free_str(s: u64) {
 // Lists
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "list_new"))]
 pub extern "C" fn yarrow_list_new(elem_size: u64) -> u64 {
     let hdr = unsafe { libc::malloc(std::mem::size_of::<List>()) } as *mut List;
     unsafe {
@@ -355,12 +288,10 @@ pub extern "C" fn yarrow_list_new(elem_size: u64) -> u64 {
     hdr as u64
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "list_len"))]
 pub extern "C" fn yarrow_list_len(l: u64) -> u64 {
     unsafe { (*(l as *const List)).len as u64 }
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "list_push"))]
 pub extern "C" fn yarrow_list_push(l: u64, value: u64) {
     unsafe {
         let list = &mut *(l as *mut List);
@@ -468,7 +399,6 @@ unsafe fn map_grow(map: &mut Map) {
     map.cap = new_cap;
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "map_new"))]
 pub extern "C" fn yarrow_map_new(keys_string: u64) -> u64 {
     let hdr = unsafe { libc::malloc(std::mem::size_of::<Map>()) } as *mut Map;
     unsafe {
@@ -485,7 +415,6 @@ pub extern "C" fn yarrow_map_new(keys_string: u64) -> u64 {
     hdr as u64
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "map_insert"))]
 pub extern "C" fn yarrow_map_insert(m: u64, key: u64, value: u64) {
     unsafe {
         let map = &mut *(m as *mut Map);
@@ -516,7 +445,6 @@ pub extern "C" fn yarrow_map_insert(m: u64, key: u64, value: u64) {
 /// # Safety
 ///
 /// `m` must be a valid map handle and `found` a valid writable pointer.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "map_get"))]
 pub unsafe extern "C" fn yarrow_map_get(m: u64, key: u64, found: *mut u8) -> u64 {
     unsafe {
         let map = &*(m as *const Map);
@@ -539,7 +467,6 @@ pub unsafe extern "C" fn yarrow_map_get(m: u64, key: u64, found: *mut u8) -> u64
     }
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "map_len"))]
 pub extern "C" fn yarrow_map_len(m: u64) -> u64 {
     unsafe { (*(m as *const Map)).len as u64 }
 }
@@ -643,7 +570,6 @@ fn free_union(u: u64, id: u32) {
 // ---------------------------------------------------------------------------
 
 /// Free a value and everything it owns, driven by a compiler kind code.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "free_value"))]
 pub extern "C" fn free_value(v: u64, kind: u64) {
     if v == 0 {
         return;
@@ -666,7 +592,6 @@ pub extern "C" fn free_value(v: u64, kind: u64) {
 /// # Safety
 ///
 /// `ptr` must point to a valid `FieldDesc` array of at least `count` elements.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "register_struct_descs"))]
 pub unsafe extern "C" fn yarrow_register_struct_descs(id: u32, ptr: *const FieldDesc, count: u64) {
     let mut descs = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
@@ -681,7 +606,6 @@ pub unsafe extern "C" fn yarrow_register_struct_descs(id: u32, ptr: *const Field
 /// # Safety
 ///
 /// `ptr` must point to a valid array of at least `count` `u64` kind codes.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "register_union_descs"))]
 pub unsafe extern "C" fn yarrow_register_union_descs(id: u32, ptr: *const u64, count: u64) {
     let mut descs = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
@@ -695,7 +619,6 @@ pub unsafe extern "C" fn yarrow_register_union_descs(id: u32, ptr: *const u64, c
 // ---------------------------------------------------------------------------
 
 /// Create a new heap region; returns a handle.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "region_new"))]
 pub extern "C" fn yarrow_region_new() -> u64 {
     let hdr = unsafe { libc::malloc(std::mem::size_of::<Region>()) } as *mut Region;
     unsafe {
@@ -710,7 +633,6 @@ pub extern "C" fn yarrow_region_new() -> u64 {
 
 /// Attach `value` (with its kind code) to `region`. Nested values are freed
 /// through their parent, so only the top-level handle is registered.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "region_register"))]
 pub extern "C" fn yarrow_region_register(value: u64, kind: u64, region: u64) {
     if region == 0 || tag(kind) <= 15 {
         return;
@@ -733,7 +655,6 @@ pub extern "C" fn yarrow_region_register(value: u64, kind: u64, region: u64) {
 }
 
 /// Free every value attached to `region`, then the region itself.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "region_free"))]
 pub extern "C" fn yarrow_region_free(region: u64) {
     if region == 0 || FREED.lock().unwrap().contains(&region) {
         return;
@@ -757,7 +678,6 @@ pub extern "C" fn yarrow_region_free(region: u64) {
 // Printing (used by the '@print...' builtins)
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_str"))]
 pub extern "C" fn yarrow_print_str(s: u64) {
     use std::io::Write;
     unsafe {
@@ -768,7 +688,6 @@ pub extern "C" fn yarrow_print_str(s: u64) {
     }
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_int"))]
 pub extern "C" fn yarrow_print_int(v: i64) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -776,7 +695,6 @@ pub extern "C" fn yarrow_print_int(v: i64) {
     let _ = out.flush();
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_float"))]
 pub extern "C" fn yarrow_print_float(v: f64) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -784,7 +702,6 @@ pub extern "C" fn yarrow_print_float(v: f64) {
     let _ = out.flush();
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_newline"))]
 pub extern "C" fn yarrow_print_newline() {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -963,7 +880,6 @@ unsafe fn print_array_to(out: &mut dyn std::io::Write, a: u64, elem_kind: u64, c
     let _ = write!(out, "]");
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_array"))]
 pub extern "C" fn yarrow_print_array(a: u64, kind: u64) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -971,7 +887,6 @@ pub extern "C" fn yarrow_print_array(a: u64, kind: u64) {
     let _ = out.flush();
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_list"))]
 pub extern "C" fn yarrow_print_list(l: u64, kind: u64) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -979,7 +894,6 @@ pub extern "C" fn yarrow_print_list(l: u64, kind: u64) {
     let _ = out.flush();
 }
 
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "print_hashmap"))]
 pub extern "C" fn yarrow_print_hashmap(m: u64, kind: u64) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
@@ -1032,7 +946,6 @@ fn fs_empty_string() -> u64 {
 
 /// Open `path` with mode rune `'r'` / `'w'` / `'a'`.
 /// Returns a non-negative fd on success, or `-FS_ERR_*` on failure.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "fs_open"))]
 pub extern "C" fn yarrow_fs_open(path: u64, mode: i64) -> i64 {
     fs_set_error(0);
     let path = match fs_path_from_handle(path) {
@@ -1085,7 +998,6 @@ pub extern "C" fn yarrow_fs_open(path: u64, mode: i64) -> i64 {
 /// Close a host fd / handle. Returns `0` on success or `FS_ERR_*`. Negative /
 /// invalid values are ignored so failed-open fallbacks (`fd -1`) are safe to
 /// close.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "fs_close"))]
 pub extern "C" fn yarrow_fs_close(fd: i64) -> i64 {
     fs_set_error(0);
     if fd < 0 {
@@ -1112,7 +1024,6 @@ pub extern "C" fn yarrow_fs_close(fd: i64) -> i64 {
 }
 
 /// Write all bytes of string handle `s` to `fd`. Returns `0` or `FS_ERR_*`.
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "fs_write"))]
 pub extern "C" fn yarrow_fs_write(fd: i64, s: u64) -> i64 {
     use std::io::Write;
 
@@ -1142,7 +1053,6 @@ pub extern "C" fn yarrow_fs_write(fd: i64, s: u64) -> i64 {
 
 /// Read the remainder of `fd` into a new string handle. On failure returns an
 /// empty string and sets [`yarrow_fs_last_error`].
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "fs_read"))]
 pub extern "C" fn yarrow_fs_read(fd: i64) -> u64 {
     use std::io::Read;
 
@@ -1194,7 +1104,6 @@ where
 }
 
 /// Last `FS_ERR_*` from a failed `fs_*` call (`0` after success).
-#[cfg_attr(feature = "aot-exports", unsafe(export_name = "fs_last_error"))]
 pub extern "C" fn yarrow_fs_last_error() -> i64 {
     FS_LAST_ERROR.with(|c| c.get())
 }
