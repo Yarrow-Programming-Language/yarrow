@@ -18,6 +18,7 @@ Build and maintain the Yarrow programming language implementation, following the
 - Treat `docs/GRAMMAR.md` as authoritative.
 - When spec and code diverge, follow the plan's tasks to close the gap.
 - In general, never use em dashs `—`.
+- Never run git commands that modify the local project unless explicitly requested by the user; read-only operations are allowed when necessary.
 
 ## Preferences
 
