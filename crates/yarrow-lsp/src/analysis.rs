@@ -1,4 +1,6 @@
-//! Run `Session::check_source` / `check_project` and map core diagnostics to LSP.
+//! Run `Session::parse_source` and map core diagnostics to LSP.
+//!
+//! Since the compiler has been removed, we only perform parsing (not type checking).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,14 +10,13 @@ use tower_lsp_server::ls_types::{
     Uri,
 };
 use yarrow_core::{
-    DEFAULT_ERROR_LIMIT, Diagnostic as CoreDiagnostic, DiagnosticBatch, ProjectOptions,
-    ProjectRoot, Session, SessionDiagnostics, Severity, SourceFile, Span,
+    Diagnostic as CoreDiagnostic, DiagnosticBatch, SessionDiagnostics, Severity, SourceFile, Span,
 };
 
 use crate::config::LspConfig;
 use crate::position::{PositionEncoding, PositionMap};
 
-/// Convert a document URI into a filesystem path for `CompileOptions::source_path`.
+/// Convert a document URI into a filesystem path.
 pub fn uri_to_source_path(uri: &Uri) -> String {
     uri.to_file_path()
         .map(|p| p.to_string_lossy().into_owned())
@@ -43,7 +44,7 @@ pub fn path_key(path: &Path) -> String {
         .into_owned()
 }
 
-/// Check `text` and build LSP diagnostics (errors and warnings).
+/// Parse `text` and build LSP diagnostics (errors and warnings from parsing only).
 pub fn check_document(
     uri: &Uri,
     text: &str,
@@ -52,10 +53,11 @@ pub fn check_document(
 ) -> Vec<Diagnostic> {
     let path = uri_to_source_path(uri);
     let session = config.session(path);
-    match session.check_source(text.to_string()) {
-        Ok(checked) => {
-            let map = PositionMap::from_file(&checked.file, encoding);
-            batch_to_lsp(uri, &checked.warnings, &map)
+    match session.parse_source(text.to_string()) {
+        Ok(_parsed) => {
+            // No parse errors, but we can still check for warnings from the parser
+            // For now, with no type checker, we return empty diagnostics on successful parse
+            Vec::new()
         }
         Err(SessionDiagnostics { file, batch }) => {
             let map = PositionMap::from_file(&file, encoding);
@@ -64,7 +66,7 @@ pub fn check_document(
     }
 }
 
-/// One root's diagnostics after a project check (or setup failure).
+/// One root's diagnostics after parsing (since type checking is no longer available).
 #[derive(Debug, Clone)]
 pub struct RootDiagnostics {
     pub uri: Uri,
@@ -72,9 +74,9 @@ pub struct RootDiagnostics {
     pub items: Vec<Diagnostic>,
 }
 
-/// Check every configured project root via [`Session::check_project`].
+/// Parse every configured project root via [`Session::parse_source`].
 ///
-/// `overlays` maps [`path_key`] → open-buffer text. Roots without an overlay
+/// `overlays` maps [`path_key`] -> open-buffer text. Roots without an overlay
 /// are read from disk. Missing / unreadable roots yield `E383` on that root's
 /// URI (no hang).
 pub fn check_project_roots(
@@ -86,7 +88,7 @@ pub fn check_project_roots(
         return Vec::new();
     }
 
-    let mut loaded: Vec<(PathBuf, Uri, ProjectRoot)> = Vec::new();
+    let mut loaded: Vec<(PathBuf, Uri, RootFile)> = Vec::new();
     let mut out: Vec<RootDiagnostics> = Vec::new();
 
     for root_path in &config.project_roots {
@@ -117,7 +119,7 @@ pub fn check_project_roots(
         loaded.push((
             root_path.clone(),
             uri,
-            ProjectRoot {
+            RootFile {
                 path: display,
                 source,
             },
@@ -128,57 +130,37 @@ pub fn check_project_roots(
         return out;
     }
 
-    let options = ProjectOptions {
-        roots: loaded.iter().map(|(_, _, r)| r.clone()).collect(),
-        module_search_paths: config.search_paths.clone(),
-        require_main: true,
-        entry_name: config.entry_name.clone(),
-        error_limit: DEFAULT_ERROR_LIMIT,
-    };
-
-    match Session::check_project(&options) {
-        Ok(checked) => {
-            for prog in checked.roots {
-                let path = PathBuf::from(&prog.file.path);
-                let Some(uri) = path_to_uri(&path) else {
-                    continue;
-                };
-                let map = PositionMap::from_file(&prog.file, encoding);
+    // Parse each root file individually (no multi-file checking without compiler)
+    for (root_path, uri, root_file) in loaded {
+        let session = config.session(&root_file.path);
+        match session.parse_source(root_file.source) {
+            Ok(_parsed) => {
+                // Successful parse, no diagnostics
                 out.push(RootDiagnostics {
                     uri: uri.clone(),
-                    path,
-                    items: batch_to_lsp(&uri, &prog.warnings, &map),
-                });
-            }
-            // Keep any E383 entries for roots that failed to load alongside
-            // successful checks on the remaining roots.
-            out
-        }
-        Err(SessionDiagnostics { file, batch }) => {
-            let path = PathBuf::from(&file.path);
-            if let Some(uri) = path_to_uri(&path) {
-                let map = PositionMap::from_file(&file, encoding);
-                out.push(RootDiagnostics {
-                    uri: uri.clone(),
-                    path,
-                    items: batch_to_lsp(&uri, &batch, &map),
-                });
-            }
-            // Clear stale diagnostics on roots that did not produce a batch.
-            for (root_path, uri, _) in &loaded {
-                let key = path_key(root_path);
-                if out.iter().any(|r| path_key(&r.path) == key) {
-                    continue;
-                }
-                out.push(RootDiagnostics {
-                    uri: uri.clone(),
-                    path: root_path.clone(),
+                    path: root_path,
                     items: Vec::new(),
                 });
             }
-            out
+            Err(SessionDiagnostics { file, batch }) => {
+                let map = PositionMap::from_file(&file, encoding);
+                out.push(RootDiagnostics {
+                    uri: uri.clone(),
+                    path: root_path,
+                    items: batch_to_lsp(&uri, &batch, &map),
+                });
+            }
         }
     }
+
+    out
+}
+
+/// Simple struct to hold root file data (replaces ProjectRoot).
+#[derive(Debug, Clone)]
+struct RootFile {
+    pub path: String,
+    pub source: String,
 }
 
 fn e383_root(

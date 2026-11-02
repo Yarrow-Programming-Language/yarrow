@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::ExitCode;
 
-use yarrow_core::{CompileOptions, ExecutionMode, Session};
+use yarrow_core::{Session, SessionOptions};
 
 use crate::args::GlobalArgs;
 use crate::commands::print_run_result;
@@ -38,13 +38,12 @@ pub fn interpret_file(
         }
     };
 
-    let mut opts = CompileOptions::new(path.clone());
+    let mut opts = SessionOptions::new(path.clone());
     for p in &global.search_paths {
         opts.module_search_paths.push(p.clone());
     }
     opts.error_limit = global.error_limit;
     opts.entry_name = entry_name.to_string();
-    opts.mode = ExecutionMode::Interpret;
 
     if global.progress() {
         eprintln!("interpreting {path} (entry {entry_name})");

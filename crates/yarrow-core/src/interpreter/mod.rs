@@ -35,10 +35,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::compiler::CompileError;
-use crate::compiler::RunResult;
-use crate::compiler::modules::{ModuleLoader, RequiredModule};
 use crate::diagnostics::Span;
+use crate::modules::{ModuleLoader, RequiredModule};
 use crate::parser::ast::{
     BinOp, EnumDecl, ErrorDecl, Expr, Function, Implement, MatchCase, MatchCaseKind, Primitive,
     Program, StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnOp, UnionDecl, Visibility,
@@ -47,6 +45,7 @@ use crate::parser::literals::{
     decode_float_literal, decode_int_literal, decode_rune_literal, decode_string_literal,
 };
 use crate::parser::parse;
+use crate::result::RunResult;
 use crate::runtime::{
     self, FieldDesc, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT, KIND_UNION,
     UNION_PAYLOAD_OFFSET, UNION_TAG_OFFSET, free_value,
@@ -176,10 +175,6 @@ impl InterpretError {
             span,
             "E393",
         )
-    }
-
-    pub fn into_compile_error(self) -> CompileError {
-        CompileError::new(self.message, self.span, self.code)
     }
 }
 
@@ -828,9 +823,10 @@ impl Interpreter {
                 "E382",
             ));
         }
-        let source = self.loader.load_at(&module_path, span).map_err(|e| {
-            InterpretError::new(e.message().to_string(), e.span(), e.code().to_string())
-        })?;
+        let source = self
+            .loader
+            .load_at(&module_path, span)
+            .map_err(|e| InterpretError::new(e.message, e.span, e.code))?;
         let tokens = Tokenizer::new(source)
             .tokenize()
             .map_err(|e| InterpretError::new(e.message, Span::from_location(e.location), e.code))?;
@@ -854,7 +850,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn resolve_require(&self, path: &str) -> IResult<(String, Option<String>)> {
+    fn resolve_require(&mut self, path: &str) -> IResult<(String, Option<String>)> {
         if let Some((parent, last)) = path.rsplit_once('.')
             && let Some(parent_source) = self.loader.try_load(parent)
         {

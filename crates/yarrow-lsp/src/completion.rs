@@ -107,8 +107,8 @@ pub fn completions(
     }
 
     let session = config.session(path);
-    if let Ok((parsed_file, program)) = session.parse_source(text.to_string()) {
-        let decls = collect_names(&parsed_file, &program);
+    if let Ok(parsed) = session.parse_source(text.to_string()) {
+        let decls = collect_names(&parsed.file, &parsed.program);
         for name in visible_names(&decls, offset) {
             if name.starts_with(prefix.as_str()) && seen.insert(name.clone()) {
                 items.push(item(name, CompletionItemKind::FUNCTION));

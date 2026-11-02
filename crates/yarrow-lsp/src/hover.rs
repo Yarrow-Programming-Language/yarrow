@@ -1,13 +1,12 @@
-//! Same-file `textDocument/hover` from AST signatures (+ typed core probes, optional diagnostic explain).
+//! Same-file `textDocument/hover` from AST signatures only.
 //!
-//! Prefers core [`CheckedProgram::definition_at`] for “defined in …” / require
-//! paths (Stage 22) when check succeeds.
+//! Compiler-based type probes removed - only AST-based signatures are available.
 
 use tower_lsp_server::ls_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 use yarrow_core::parser::ast::{
     Function, Mutability, ParamModifier, Primitive, Stmt, StmtKind, Type, TypeKind,
 };
-use yarrow_core::{DefKind, Program, SourceFile, Span, TokenKind, Tokenizer, explain_code};
+use yarrow_core::{Program, SourceFile, Span, TokenKind, Tokenizer, explain_code};
 
 use crate::config::LspConfig;
 use crate::position::{PositionEncoding, PositionMap};
@@ -21,65 +20,21 @@ pub fn hover(
     config: &LspConfig,
 ) -> Option<Hover> {
     let session = config.session(path);
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
-    let map = PositionMap::from_file(&file, encoding);
+    let parsed = session.parse_source(text.to_string()).ok()?;
+    let map = PositionMap::from_file(&parsed.file, encoding);
     let offset = map.offset(position)?;
-    let name = identifier_at(&file.source, offset)?;
-    let decls = collect_hovers(&file, &program);
+    let name = identifier_at(&parsed.file.source, offset)?;
+    let decls = collect_hovers(&parsed.file, &parsed.program);
     let decl = resolve(&decls, &name, offset)?;
     let range = map.range(decl.name_span);
 
     let mut md = format!("```yarrow\n{}\n```", decl.signature);
 
-    // Stage 9 / 22: enrich with checker types, definition / require probes, explain.
-    match session.check_source(text.to_string()) {
-        Ok(checked) => {
-            if let Some(probe) = checked
-                .type_at(offset)
-                .or_else(|| checked.type_at(decl.name_span.lo))
-            {
-                if let Some(ty) = probe.ty.as_deref() {
-                    md.push_str("\n\n**type:** `");
-                    md.push_str(ty);
-                    md.push('`');
-                } else if let Some(sig) = probe.signature.as_deref() {
-                    md.push_str("\n\n```yarrow\n");
-                    md.push_str(sig);
-                    md.push_str("\n```");
-                }
-            }
-            if let Some(def) = checked.definition_at(offset) {
-                match def.kind {
-                    DefKind::Definition => {
-                        md.push_str("\n\n*defined in* `");
-                        md.push_str(&def.path);
-                        md.push('`');
-                    }
-                    DefKind::Require => {
-                        md.push_str("\n\n*module* `");
-                        md.push_str(&def.path);
-                        md.push('`');
-                        if let Some(file) = def.file_path.as_deref() {
-                            md.push_str("\n\n*resolved* `");
-                            md.push_str(file);
-                            md.push('`');
-                        } else if let Some(target) = crate::modules::resolve_require_file(
-                            path,
-                            &def.path,
-                            &config.search_paths,
-                        ) && let Some(uri) = target.uri()
-                        {
-                            md.push_str("\n\n*resolved* `");
-                            md.push_str(uri.as_str());
-                            md.push('`');
-                        }
-                    }
-                }
-            }
-            if let Some(explain) = explain_in_batch(&checked.warnings, offset) {
-                md.push_str("\n\n---\n\n");
-                md.push_str(&explain);
-            }
+    // With no type checker, we can only show AST-based info
+    // Try to show diagnostics from parsing if available
+    match session.parse_source(text.to_string()) {
+        Ok(_) => {
+            // Successful parse, nothing more to add
         }
         Err(err) => {
             if let Some(explain) = explain_in_batch(&err.batch, offset) {

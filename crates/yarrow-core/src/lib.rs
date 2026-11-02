@@ -1,38 +1,29 @@
-pub mod analysis;
-pub mod compiler;
 pub mod diagnostics;
 pub mod entry;
 pub mod interpreter;
-pub mod link;
+pub mod modules;
 pub mod parser;
-pub mod project;
+pub mod result;
 pub mod runtime;
 pub mod session;
-pub mod target;
 pub mod tokenizer;
 
-pub use analysis::{DefIndex, DefKind, DefProbe, TypeIndex, TypeProbe};
-pub use compiler::{CompileError, Compiler, RunResult, std_module_source};
 pub use diagnostics::{
     ColorChoice, DEFAULT_ERROR_LIMIT, Diagnostic, DiagnosticBatch, ExplainEntry, ICE_CODE,
     Severity, SourceFile, Span, explain_code, format_explain, normalize_code, render,
 };
 pub use entry::{DEFAULT_ENTRY_NAME, PROCESS_MAIN_SYMBOL};
 pub use interpreter::{EvalContext, InterpretError, Interpreter, Value as InterpretValue};
-pub use link::link_executable;
+pub use modules::{ModuleError, ModuleLoader, RequiredModule};
 pub use parser::ParseError;
 pub use parser::Parser;
 pub use parser::ast::Program;
 pub use parser::ast::Stmt;
-pub use project::{
-    CheckedProject, ModuleGraph, ModuleGraphEdge, ProjectOptions, ProjectRoot, check_project,
-};
-pub use runtime::{RuntimeArchive, link_symbol_names, linkable_archive, linkable_archive_for};
+pub use result::RunResult;
+pub use runtime::*;
 pub use session::{
-    CheckedProgram, CompileOptions, ExecutableArtifact, ExecutionMode, ObjectArtifact, OptLevel,
-    Session, SessionArtifact, SessionDiagnostics, SessionFailureKind, render_batch,
+    ParsedProgram, Session, SessionDiagnostics, SessionFailureKind, SessionOptions, render_batch,
 };
-pub use target::{TargetError, TargetTriple, supported_triple_names, supported_triples};
 pub use tokenizer::Token;
 pub use tokenizer::TokenKind;
 pub use tokenizer::Tokenizer;

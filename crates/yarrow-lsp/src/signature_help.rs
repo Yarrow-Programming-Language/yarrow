@@ -1,4 +1,6 @@
 //! `textDocument/signatureHelp` for postfix `name call` (and `a.b call`) sites.
+//!
+//! Uses AST-based signatures only (compiler-based type probes removed).
 
 use tower_lsp_server::ls_types::{
     ParameterInformation, ParameterLabel, Position, SignatureHelp, SignatureInformation,
@@ -20,44 +22,22 @@ pub fn signature_help(
     config: &LspConfig,
 ) -> Option<SignatureHelp> {
     let session = config.session(path);
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
-    let map = PositionMap::from_file(&file, encoding);
+    let parsed = session.parse_source(text.to_string()).ok()?;
+    let map = PositionMap::from_file(&parsed.file, encoding);
     let offset = map.offset(position)?;
-    let site = call_site_at(&file.source, offset)?;
+    let site = call_site_at(&parsed.file.source, offset)?;
 
-    let decls = collect_functions(&file, &program);
+    let decls = collect_functions(&parsed.file, &parsed.program);
     let decl = resolve(&decls, &site.name, site.name_offset)?;
-
-    let mut label = decl.signature.clone();
-    let mut parameters = decl.parameters.clone();
-
-    // Prefer core probe signature when available (stack-effect notes).
-    if let Ok(checked) = session.check_source(text.to_string())
-        && let Some(probe) = checked
-            .type_at(site.name_offset)
-            .or_else(|| checked.type_at(decl.name_span.lo))
-        && let Some(sig) = probe.signature.as_deref()
-        && !sig.is_empty()
-    {
-        label = sig.to_string();
-        // Core signatures may not match AST param substrings; keep AST params
-        // only when each label still appears in the probe text.
-        if !parameters
-            .iter()
-            .all(|p| matches!(p.label, ParameterLabel::Simple(ref s) if label.contains(s)))
-        {
-            parameters.clear();
-        }
-    }
 
     Some(SignatureHelp {
         signatures: vec![SignatureInformation {
-            label,
+            label: decl.signature.clone(),
             documentation: None,
-            parameters: if parameters.is_empty() {
+            parameters: if decl.parameters.is_empty() {
                 None
             } else {
-                Some(parameters)
+                Some(decl.parameters.clone())
             },
             active_parameter: None,
         }],
@@ -71,7 +51,7 @@ pub fn signature_help(
 struct CallSite {
     /// Last identifier in the callee path (`demo`, `write_line`, …).
     name: String,
-    /// Byte offset inside the simple name (for scope resolve / type_at).
+    /// Byte offset inside the simple name (for scope resolve).
     name_offset: usize,
 }
 

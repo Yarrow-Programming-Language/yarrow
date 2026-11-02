@@ -59,7 +59,7 @@ pub fn semantic_tokens_full(
     let session = config.session(path);
     let decls = session
         .parse_source(text.to_string())
-        .map(|(file, program)| collect_decls(&file, &program))
+        .map(|parsed| collect_decls(&parsed.file, &parsed.program))
         .unwrap_or_default();
 
     let map = PositionMap::new(text, encoding);

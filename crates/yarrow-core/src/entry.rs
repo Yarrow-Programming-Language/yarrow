@@ -13,8 +13,5 @@
 /// Linker symbol object emit exports as the host process entry.
 pub const PROCESS_MAIN_SYMBOL: &str = "main";
 
-/// Internal object-local symbol for the real Yarrow entry body (not process-visible).
-pub(crate) const USER_ENTRY_LINK_SYMBOL: &str = "yarrow_user_entry";
-
-/// Default language entry name (`CompileOptions::entry_name`).
+/// Default language entry name.
 pub const DEFAULT_ENTRY_NAME: &str = "main";

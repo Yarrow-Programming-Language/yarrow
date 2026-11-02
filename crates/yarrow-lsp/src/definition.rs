@@ -1,11 +1,10 @@
 //! Same-file + `require` cross-file `textDocument/definition`.
 //!
-//! Prefers core [`CheckedProgram::definition_at`] (Stage 22) when check succeeds;
-//! falls back to the AST / require walk on miss or check failure.
+//! Uses AST-based resolution only (compiler-based definition probes removed).
 
 use tower_lsp_server::ls_types::{GotoDefinitionResponse, Location, Position, Range, Uri};
 use yarrow_core::parser::ast::{Function, Stmt, StmtKind};
-use yarrow_core::{DefKind, Program, SourceFile, Span, TokenKind, Tokenizer};
+use yarrow_core::{Program, SourceFile, Span, TokenKind, Tokenizer};
 
 use crate::config::LspConfig;
 use crate::modules::{self, ModuleTarget, item_name_span_in};
@@ -21,24 +20,13 @@ pub fn goto_definition(
     config: &LspConfig,
 ) -> Option<GotoDefinitionResponse> {
     let session = config.session(path);
-    let map_file = SourceFile::new(path.to_string(), text.to_string());
-    let map = PositionMap::from_file(&map_file, encoding);
-    let offset = map.offset(position)?;
 
-    if let Ok(checked) = session.check_source(text.to_string())
-        && let Some(probe) = checked.definition_at(offset)
-    {
-        let probe_map = PositionMap::from_file(&checked.file, encoding);
-        if let Some(resp) = location_from_probe(&probe, &probe_map, uri, path, encoding, config) {
-            return Some(resp);
-        }
-    }
-
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
-    let map = PositionMap::from_file(&file, encoding);
+    // AST-based resolution only (no type checker available)
+    let parsed = session.parse_source(text.to_string()).ok()?;
+    let map = PositionMap::from_file(&parsed.file, encoding);
     let offset = map.offset(position)?;
-    let name = identifier_at(&file.source, offset)?;
-    let decls = collect_decls(&file, &program);
+    let name = identifier_at(&parsed.file.source, offset)?;
+    let decls = collect_decls(&parsed.file, &parsed.program);
     let decl = resolve(&decls, &name, offset)?;
 
     if let Some(require_path) = &decl.require_path
@@ -53,45 +41,6 @@ pub fn goto_definition(
         uri.clone(),
         range,
     )))
-}
-
-fn location_from_probe(
-    probe: &yarrow_core::DefProbe,
-    map: &PositionMap,
-    uri: &Uri,
-    source_path: &str,
-    encoding: PositionEncoding,
-    config: &LspConfig,
-) -> Option<GotoDefinitionResponse> {
-    match probe.kind {
-        DefKind::Definition => {
-            let range = map.range(probe.def_span);
-            Some(GotoDefinitionResponse::Scalar(Location::new(
-                uri.clone(),
-                range,
-            )))
-        }
-        DefKind::Require => {
-            let target = probe
-                .file_path
-                .as_ref()
-                .map(|p| ModuleTarget {
-                    module_path: probe.path.clone(),
-                    path: Some(std::path::PathBuf::from(p)),
-                    item: Some(probe.name.clone()),
-                })
-                .or_else(|| {
-                    modules::resolve_require_file(source_path, &probe.path, &config.search_paths)
-                        .map(|mut t| {
-                            if t.item.is_none() && !probe.name.is_empty() {
-                                t.item = Some(probe.name.clone());
-                            }
-                            t
-                        })
-                })?;
-            location_from_target(&target, encoding)
-        }
-    }
 }
 
 fn location_from_target(

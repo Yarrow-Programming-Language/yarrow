@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use yarrow_core::{
-    CompileOptions, DiagnosticBatch, Parser, Program, Session, SessionDiagnostics, SourceFile,
+    DiagnosticBatch, Parser, Program, Session, SessionDiagnostics, SessionOptions, SourceFile,
     Span, Token, TokenKind,
 };
 
@@ -182,7 +182,7 @@ impl FormatIr {
         source: impl Into<String>,
         path: impl Into<String>,
     ) -> Result<FormatIrParse, SessionDiagnostics> {
-        let opts = CompileOptions::new(path);
+        let opts = SessionOptions::new(path);
         let session = Session::new(opts);
         let (file, tokens) = session.tokenize_source(source.into())?;
         let trivia = TriviaMap::from_tokens(&tokens);

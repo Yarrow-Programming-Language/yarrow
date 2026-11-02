@@ -92,6 +92,21 @@ pub enum LspLogLevel {
     Debug,
 }
 
+impl std::str::FromStr for LspLogLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" => Ok(LspLogLevel::Off),
+            "error" => Ok(LspLogLevel::Error),
+            "warn" => Ok(LspLogLevel::Warn),
+            "info" => Ok(LspLogLevel::Info),
+            "debug" => Ok(LspLogLevel::Debug),
+            _ => Err(format!("unknown log level: {}", s)),
+        }
+    }
+}
+
 impl LspLogLevel {
     pub fn allows(self, level: LspLogLevel) -> bool {
         match self {

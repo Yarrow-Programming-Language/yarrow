@@ -67,32 +67,6 @@ impl GlobalArgs {
     }
 }
 
-/// Intermediate form printed by `dump --emit`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum EmitKind {
-    Tokens,
-    Ast,
-    Ir,
-}
-
-/// Artifact written by `compile --target object --emit`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum CompileEmitKind {
-    /// Relocatable native object (`.o`). Default.
-    Object,
-    /// Linked host executable.
-    Exe,
-}
-
-/// Compile / run backend selected with `--target`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum TargetKind {
-    /// Cranelift in-process machine code (`--target jit`).
-    Jit,
-    /// Native relocatable object / linked executable (default).
-    Object,
-}
-
 /// `--color` argument value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ColorArg {
@@ -113,52 +87,6 @@ impl ColorArg {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
-    #[command(hide = true)]
-    /// Compile and run a Yarrow source file (compiler - hidden).
-    Run {
-        /// Source file to compile and run.
-        #[arg(value_name = "FILE")]
-        file: std::path::PathBuf,
-
-        /// Codegen backend (`jit` or `object`). Default: `object`.
-        #[arg(long, value_enum, default_value = "object")]
-        target: TargetKind,
-
-        /// Top-level entry function name (default `main`).
-        #[arg(long, value_name = "NAME", default_value = "main")]
-        main: String,
-
-        /// Arguments forwarded to the program (after `--`).
-        #[arg(last = true, value_name = "ARGS")]
-        program_args: Vec<OsString>,
-    },
-
-    #[command(hide = true)]
-    /// Compile a Yarrow source file (compiler - hidden).
-    Compile {
-        /// Source file to compile.
-        #[arg(value_name = "FILE")]
-        file: std::path::PathBuf,
-
-        /// Codegen backend (`jit` or `object`). Default: `object`.
-        #[arg(long, value_enum, default_value = "object")]
-        target: TargetKind,
-
-        /// Artifact for `--target object`: relocatable `object` or linked `exe`.
-        /// Ignored for `--target jit`. Default: `object`.
-        #[arg(long, value_enum, default_value = "object")]
-        emit: CompileEmitKind,
-
-        /// Top-level entry function name (default `main`).
-        #[arg(long, value_name = "NAME", default_value = "main")]
-        main: String,
-
-        /// Output path for `--target object` (default `object` → `./<stem>.o`,
-        /// `exe` → `./<stem>`). Overrides the default; recorded for `clean`.
-        #[arg(short = 'o', long = "output", value_name = "PATH")]
-        output: Option<std::path::PathBuf>,
-    },
-
     /// Remove artifacts recorded by this CLI's `compile`.
     ///
     /// Deletes only paths listed in `.yarrow-build/artifacts` (never a
@@ -166,28 +94,6 @@ pub enum Cmd {
     /// Objects written outside this CLI (or before recording existed) are not
     /// removed unless they appear in the manifest.
     Clean,
-
-    #[command(hide = true)]
-    /// Check source without running main (compiler - hidden).
-    Check {
-        /// Root `.yar` file(s). One path → single-file check; two or more →
-        /// project check. Required unless `--corpus` is set.
-        #[arg(
-            value_name = "FILE",
-            num_args = 0..,
-            required_unless_present = "corpus",
-            conflicts_with = "corpus"
-        )]
-        files: Vec<std::path::PathBuf>,
-
-        /// Directory of programs to check (immediate `*.yar` only).
-        #[arg(long, value_name = "DIR", conflicts_with = "files")]
-        corpus: Option<std::path::PathBuf>,
-
-        /// Top-level entry function name (default `main`).
-        #[arg(long, value_name = "NAME", default_value = "main")]
-        main: String,
-    },
 
     /// Execute a Yarrow source file on the stack VM interpreter.
     ///
@@ -295,7 +201,7 @@ pub enum Cmd {
 
         /// Log level for process messages on stderr.
         #[arg(long, value_enum, default_value = "info")]
-        log_level: crate::commands::LspLogLevel,
+        log_level: String,
     },
 
     /// Print the long form of a diagnostic code.
@@ -307,13 +213,4 @@ pub enum Cmd {
 
     /// Print the CLI version.
     Version,
-
-    #[command(hide = true)]
-    /// Print an intermediate representation and exit (compiler - hidden).
-    Dump {
-        #[arg(value_name = "FILE")]
-        file: std::path::PathBuf,
-        #[arg(long, value_enum, default_value = "ir")]
-        emit: EmitKind,
-    },
 }

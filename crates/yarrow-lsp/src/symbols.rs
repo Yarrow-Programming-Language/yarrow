@@ -25,8 +25,8 @@ pub fn document_symbols(
     config: &LspConfig,
 ) -> Option<Vec<DocumentSymbol>> {
     let session = config.session(path);
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
-    Some(program_symbols(&file, &program, encoding))
+    let parsed = session.parse_source(text.to_string()).ok()?;
+    Some(program_symbols(&parsed.file, &parsed.program, encoding))
 }
 
 /// Search open buffers (and on-disk `require` targets already resolvable from them).
@@ -117,12 +117,12 @@ fn collect_workspace_from_text(
     mut require_queue: Option<&mut Vec<PathBuf>>,
 ) {
     let session = config.session(path);
-    let Ok((file, program)) = session.parse_source(text.to_string()) else {
+    let Ok(parsed) = session.parse_source(text.to_string()) else {
         return;
     };
-    let map = PositionMap::from_file(&file, encoding);
-    let source = file.source.as_str();
-    for item in &program.items {
+    let map = PositionMap::from_file(&parsed.file, encoding);
+    let source = parsed.file.source.as_str();
+    for item in &parsed.program.items {
         match &item.kind {
             StmtKind::Function(f) => {
                 push_workspace_symbol(
@@ -187,7 +187,7 @@ fn collect_workspace_from_text(
             StmtKind::Require { path: req, .. } => {
                 if let Some(queue) = require_queue.as_mut()
                     && let Some(target) =
-                        modules::resolve_require_file(path, req, &config.search_paths)
+                        modules::resolve_require_file(path, &req, &config.search_paths)
                     && let Some(disk) = target.path
                 {
                     queue.push(disk);

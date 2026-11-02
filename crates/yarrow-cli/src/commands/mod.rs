@@ -1,24 +1,16 @@
-mod check;
 mod clean;
-mod compile;
-mod dump;
 mod explain;
 mod fmt;
 mod interpret;
 mod lsp;
 mod repl;
-mod run;
 
-pub use check::{check_corpus, check_files};
 pub use clean::clean_artifacts;
-pub use compile::compile_file;
-pub use dump::dump_file;
 pub use explain::explain_code;
 pub use fmt::run_fmt_command;
 pub use interpret::interpret_file;
 pub use lsp::{LspLogLevel, run_lsp};
 pub use repl::run_repl;
-pub use run::run_file;
 
 use yarrow_core::RunResult;
 

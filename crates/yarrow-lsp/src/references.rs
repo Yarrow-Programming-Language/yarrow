@@ -23,19 +23,19 @@ pub fn find_references(
     config: &LspConfig,
 ) -> Option<Vec<Location>> {
     let session = config.session(path);
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
-    let map = PositionMap::from_file(&file, encoding);
+    let parsed = session.parse_source(text.to_string()).ok()?;
+    let map = PositionMap::from_file(&parsed.file, encoding);
     let offset = map.offset(position)?;
-    let name = identifier_at(&file.source, offset)?;
+    let name = identifier_at(&parsed.file.source, offset)?;
 
-    let mut tokenizer = Tokenizer::new(file.source.clone());
+    let mut tokenizer = Tokenizer::new(parsed.file.source.clone());
     let tokens = tokenizer.tokenize().ok()?;
     let idents: Vec<_> = tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Identifier && t.lexeme == name)
         .collect();
 
-    let decls = collect_decls(&file, &program);
+    let decls = collect_decls(&parsed.file, &parsed.program);
     let locations = if let Some(decl) = resolve(&decls, &name, offset) {
         idents
             .iter()

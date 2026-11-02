@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use yarrow_core::{CompileOptions, DEFAULT_ENTRY_NAME, Session};
+use yarrow_core::{DEFAULT_ENTRY_NAME, Session, SessionOptions};
 
 /// Runtime configuration shared by diagnostics, navigation, and formatting.
 #[derive(Debug, Clone)]
@@ -41,9 +41,9 @@ impl LspConfig {
         !self.project_roots.is_empty()
     }
 
-    /// Build [`CompileOptions`] for a document path.
-    pub fn compile_options(&self, source_path: impl Into<String>) -> CompileOptions {
-        let mut opts = CompileOptions::new(source_path);
+    /// Build [`SessionOptions`] for a document path.
+    pub fn session_options(&self, source_path: impl Into<String>) -> SessionOptions {
+        let mut opts = SessionOptions::new(source_path);
         opts.module_search_paths = self.search_paths.clone();
         opts.entry_name = self.entry_name.clone();
         opts
@@ -51,7 +51,7 @@ impl LspConfig {
 
     /// Session configured with this crate's search paths and entry name.
     pub fn session(&self, source_path: impl Into<String>) -> Session {
-        Session::new(self.compile_options(source_path))
+        Session::new(self.session_options(source_path))
     }
 
     /// Merge client init options and workspace folder roots into this config.

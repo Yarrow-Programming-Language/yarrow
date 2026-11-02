@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use tower_lsp_server::ls_types::Uri;
+use yarrow_core::Session;
 use yarrow_core::parser::ast::StmtKind;
-use yarrow_core::{CompileOptions, Session, std_module_source};
 
 /// URI scheme for embedded std modules when on-disk `lib/std` is missing.
 pub const STD_URI_SCHEME: &str = "yarrow-std";
@@ -36,12 +36,12 @@ impl ModuleTarget {
         }
     }
 
-    /// Module source text (disk or embedded).
+    /// Module source text (disk only, embedded std disabled without compiler).
     pub fn source(&self) -> Option<String> {
         if let Some(path) = &self.path {
             std::fs::read_to_string(path).ok()
         } else {
-            std_module_source(&self.module_path).map(str::to_string)
+            None // embedded std disabled without compiler
         }
     }
 }
@@ -78,10 +78,9 @@ pub fn is_virtual_std_uri(uri: &Uri) -> bool {
     uri.scheme().as_str() == STD_URI_SCHEME
 }
 
-/// Source for a virtual std URI, if known.
-pub fn source_for_std_uri(uri: &Uri) -> Option<&'static str> {
-    let module_path = module_path_from_std_uri(uri)?;
-    std_module_source(&module_path)
+/// Source for a virtual std URI (disabled without compiler).
+pub fn source_for_std_uri(_uri: &Uri) -> Option<&'static str> {
+    None // embedded std disabled without compiler
 }
 
 /// Resolve a `require` path string to a file under search roots / `lib/std`,
@@ -123,11 +122,10 @@ fn classify_require(
 
 fn module_resolvable(source_path: &str, module_path: &str, search_paths: &[PathBuf]) -> bool {
     locate_module_file(source_path, module_path, search_paths).is_some()
-        || module_exists_embedded(module_path)
 }
 
-fn module_exists_embedded(module_path: &str) -> bool {
-    std_module_source(module_path).is_some()
+fn module_exists_embedded(_module_path: &str) -> bool {
+    false // embedded std disabled without compiler
 }
 
 fn module_has_top_level_function(
@@ -142,17 +140,14 @@ fn module_has_top_level_function(
                 return false;
             };
             (path.to_string_lossy().into_owned(), text)
-        } else if let Some(src) = std_module_source(module_path) {
-            (module_path.to_string(), src.to_string())
         } else {
             return false;
         };
-    let opts = CompileOptions::new(label);
-    let session = Session::new(opts);
-    let Ok((_, program)) = session.parse_source(text) else {
+    let session = Session::with_source_path(label);
+    let Ok(parsed) = session.parse_source(text) else {
         return false;
     };
-    program.items.iter().any(|item| {
+    parsed.program.items.iter().any(|item| {
         matches!(&item.kind, StmtKind::Function(f) if f.name == name)
             || matches!(&item.kind, StmtKind::Implement(imp) if imp.functions.iter().any(|f| f.name == name))
     })
@@ -223,11 +218,10 @@ fn canonical_or_self(path: PathBuf) -> Option<PathBuf> {
 
 /// Byte span of a top-level function / method named `item` in `text`, if any.
 pub fn item_name_span_in(source: &str, path_label: &str, item: &str) -> Option<yarrow_core::Span> {
-    let opts = CompileOptions::new(path_label.to_string());
-    let session = Session::new(opts);
-    let (file, program) = session.parse_source(source.to_string()).ok()?;
-    let source = file.source.as_str();
-    for stmt in &program.items {
+    let session = Session::with_source_path(path_label.to_string());
+    let parsed = session.parse_source(source.to_string()).ok()?;
+    let source = parsed.file.source.as_str();
+    for stmt in &parsed.program.items {
         match &stmt.kind {
             StmtKind::Function(f) if f.name == item => {
                 return name_span_in(source, stmt.span, item);

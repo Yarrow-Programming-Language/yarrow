@@ -132,11 +132,11 @@ fn rename_target<'a>(
     config: &LspConfig,
 ) -> Option<Target<'a>> {
     let session = config.session(path);
-    let (file, program) = session.parse_source(text.to_string()).ok()?;
+    let parsed = session.parse_source(text.to_string()).ok()?;
     let map = PositionMap::new(text, encoding);
     let offset = map.offset(position)?;
     let (name, name_span) = identifier_span_at(text, offset)?;
-    let decls = collect_decls(&file, &program);
+    let decls = collect_decls(&parsed.file, &parsed.program);
     let decl = resolve(&decls, &name, offset)?.clone();
     Some(Target {
         map,

@@ -19,13 +19,13 @@ mod artifacts;
 mod commands;
 mod diagnostics;
 
-pub use args::{Cli, Cmd, TargetKind};
+pub use args::{Cli, Cmd};
 
 use std::ffi::OsString;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::ExitCode;
 
-use yarrow_core::{CompileOptions, Session};
+use yarrow_core::Session;
 
 use crate::diagnostics::{EXIT_ICE, report_caught_panic, report_session_failure};
 
@@ -58,7 +58,7 @@ where
             // Fall through into catch_unwind so the banner + 101 path runs.
         }
         Some("session") => {
-            let session = Session::new(CompileOptions::new("<debug-ice>"));
+            let session = Session::with_source_path("<debug-ice>");
             let diags = session.debug_trigger_ice("YARROW_DEBUG_ICE=session");
             return report_session_failure(&diags, cli.global.color.to_core());
         }
@@ -86,42 +86,9 @@ fn dispatch(cli: Cli) -> ExitCode {
     }
 
     match (cli.cmd, cli.file) {
-        (
-            Some(Cmd::Run {
-                file,
-                target,
-                main,
-                program_args,
-            }),
-            None,
-        ) => commands::run_file(&file, target, &main, &program_args, &cli.global),
         (None, Some(file)) => {
             // `yarrow <file>` now uses the interpreter by default.
             commands::interpret_file(&file, "main", &[], &cli.global)
-        }
-        (
-            Some(Cmd::Compile {
-                file,
-                target,
-                emit,
-                main,
-                output,
-            }),
-            None,
-        ) => commands::compile_file(&file, target, emit, &main, output.as_deref(), &cli.global),
-        (
-            Some(Cmd::Check {
-                files,
-                corpus,
-                main,
-            }),
-            None,
-        ) => {
-            if let Some(dir) = corpus {
-                commands::check_corpus(&dir, &main, &cli.global)
-            } else {
-                commands::check_files(&files, &main, &cli.global)
-            }
         }
         (
             Some(Cmd::Interpret {
@@ -188,20 +155,27 @@ fn dispatch(cli: Cli) -> ExitCode {
                 eprintln!("error: pass --stdio (default) or --listen HOST:PORT");
                 ExitCode::from(2)
             } else {
+                // Convert string log_level to LspLogLevel
+                let log_level_enum = match log_level.parse::<commands::LspLogLevel>() {
+                    Ok(l) => l,
+                    Err(_) => {
+                        eprintln!("error: invalid log level '{}'", log_level);
+                        return ExitCode::from(2);
+                    }
+                };
                 commands::run_lsp(
                     &cli.global,
                     &search_paths,
                     &main,
                     !no_format,
                     !no_inlay,
-                    log_level,
+                    log_level_enum,
                     listen.as_deref(),
                 )
             }
         }
-        (Some(Cmd::Dump { file, emit }), None) => commands::dump_file(&file, emit, &cli.global),
-        (Some(Cmd::Explain { code }), None) => commands::explain_code(&code, &cli.global),
         (Some(Cmd::Clean), None) => commands::clean_artifacts(&cli.global),
+        (Some(Cmd::Explain { code }), None) => commands::explain_code(&code, &cli.global),
         (Some(Cmd::Version), None) => {
             // Clap's built-in `--version` prints only the top-level crate version;
             // this subcommand matches `rustc -V` style UX.
@@ -218,7 +192,7 @@ fn dispatch(cli: Cli) -> ExitCode {
             // `arg_required_else_help` isn't enough once everything is optional.
             // Print a concise usage and keep exit code consistent.
             eprintln!(
-                "usage: yarrow <file.yar>\n       yarrow interpret <file.yar>\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow clean\n\n       (Hidden compiler commands: run, compile, check, dump)"
+                "usage: yarrow <file.yar>\n       yarrow interpret <file.yar>\n       yarrow repl\n       yarrow fmt [--check] [PATH...]\n       yarrow lsp\n       yarrow clean\n       yarrow explain <code>\n       yarrow --version"
             );
             ExitCode::from(2)
         }
