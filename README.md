@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Safe by default · No lifetime annotations · Interpreter, code formatter, and LSP
+  Safe by default · No lifetime annotations · Interpreter-only with LSP
 </p>
 
 ---
@@ -47,8 +47,7 @@ cargo build --release
 Common commands:
 
 ```bash
-yarrow <file.yar>              # Interpret and run (default)
-yarrow interpret <file.yar>    # Interpreted execution
+yarrow interpret <file.yar>    # Parse and execute
 yarrow repl                    # Interactive REPL
 yarrow fmt [--check] [path]    # Format source code
 yarrow lsp                     # Start language server
@@ -57,9 +56,9 @@ yarrow explain E360            # Look up error code
 
 ## Repository layout
 
-- `crates/yarrow-core` - tokenizer, parser, type checker, and interpreter
-- `crates/yarrow-runtime` - host heap and `HOST_FNS`
-- `crates/yarrow-cli` - Clap-based CLI driver with interpreter as default
+- `crates/yarrow-core` - tokenizer, parser, and interpreter
+- `crates/yarrow-runtime` - host heap and `HOST_FNS` (interpreter runtime)
+- `crates/yarrow-cli` - Clap-based CLI driver for the interpreter
 - `crates/yarrow-fmt` - code formatter
 - `crates/yarrow-lsp` - language server
 - `docs/` - [language reference, style guide, and examples](docs/README.md)
@@ -69,7 +68,7 @@ Implementation roadmaps: `crates/**/PLAN.md`
 
 ## Project status
 
-CLI focuses on the interpreter, code formatter, and language server. The interpreter provides fast feedback during development. Language design is documented in [`docs/`](docs/README.md); prefer the grammar specification when examples and implementation disagree.
+Yarrow is now interpreter-only. The interpreter provides execution with LSP support for development. Language design is documented in [`docs/`](docs/README.md); prefer the grammar specification when examples and implementation disagree. Note that without a type checker, the LSP provides AST-based analysis only.
 
 ## Documentation
 

@@ -4,9 +4,9 @@ Command-line interface for the [Yarrow](https://github.com/Yarrow-Programming-La
 
 ## Overview
 
-`yarrow-cli` provides the main entry point for interacting with the Yarrow compiler and toolchain from the command line. It delegates to:
+`yarrow-cli` provides the main entry point for interacting with the Yarrow interpreter and toolchain from the command line. It delegates to:
 
-- [`yarrow-core`](../yarrow-core) for compilation and execution
+- [`yarrow-core`](../yarrow-core) for parsing and interpretation
 - [`yarrow-fmt`](../yarrow-fmt) for code formatting
 - [`yarrow-lsp`](../yarrow-lsp) for Language Server Protocol support
 
@@ -36,21 +36,22 @@ yarrow [OPTIONS] [SUBCOMMAND]
 
 | Command | Description                               |
 | ------- | ----------------------------------------- |
-| `run`   | Compile and execute a Yarrow file         |
-| `check` | Type-check a file without executing       |
+| `interpret` | Parse and execute a Yarrow file           |
+| `repl`   | Start an interactive interpreter session   |
 | `fmt`   | Format Yarrow source files                |
 | `lsp`   | Start the Language Server Protocol server |
-| `build` | Compile to various output formats         |
-| `doc`   | Generate documentation                    |
+| `explain` | Print the long form of a diagnostic code   |
+| `version` | Print the CLI version                     |
+| `clean`  | Remove CLI artifacts                      |
 
 ### Examples
 
 ```bash
 # Run a Yarrow file
-yarrow run hello.yar
+yarrow interpret hello.yar
 
-# Check a file for errors
-yarrow check my_file.yar
+# Start the REPL
+yarrow repl
 
 # Format a file in-place
 yarrow fmt my_file.yar
@@ -60,35 +61,39 @@ yarrow lsp
 
 # Format all Yarrow files in a directory
 yarrow fmt ./src/
+
+# Print version
+yarrow version
+
+# Explain a diagnostic code
+yarrow explain E360
 ```
 
 ## Subcommands
 
-### `run`
+### `interpret`
 
-Compile and execute a Yarrow program:
+Parse and execute a Yarrow program:
 
 ```bash
-yarrow run [OPTIONS] <FILE>
+yarrow interpret [OPTIONS] <FILE>
 ```
 
 Options:
 
-- `--release` - Compile with optimizations
-- `--emit <FORMAT>` - Output format: `jit` (default), `obj`, `asm`
-- `--output <FILE>` - Write output to file
+- `--main <NAME>` - Entry function name (default: `main`)
+- `-L <DIR>` - Add module search path
+- `--error-limit <N>` - Maximum number of errors to report
 
-### `check`
+### `repl`
 
-Type-check without executing:
+Start an interactive interpreter session:
 
 ```bash
-yarrow check [OPTIONS] <FILE>
+yarrow repl [OPTIONS]
 ```
 
-Options:
-
-- `--json` - Output diagnostics as JSON
+The REPL provides an interactive environment for testing Yarrow code snippets.
 
 ### `fmt`
 
@@ -115,38 +120,43 @@ yarrow lsp [OPTIONS]
 Options:
 
 - `--listen <ADDR>` - Listen on TCP address (e.g., `127.0.0.1:8080`)
-- `--log-level <LEVEL>` - Set log level: `error`, `warn`, `info`, `debug`, `trace`
+- `--log-level <LEVEL>` - Set log level: `off`, `error`, `warn`, `info`, `debug`
+- `--stdio` - Use stdin/stdout (default when `--listen` is omitted)
+- `-L <DIR>` - Add module search path
+- `--main <NAME>` - Entry function name
+- `--no-format` - Disable `textDocument/formatting`
+- `--no-inlay` - Disable `textDocument/inlayHint`
 
 See [`yarrow-lsp`](../yarrow-lsp/README.md) for more details.
 
-### `build`
+### `explain`
 
-Compile Yarrow code to various formats:
+Print the long form of a diagnostic code:
 
 ```bash
-yarrow build [OPTIONS] <FILE>
+yarrow explain [OPTIONS] <CODE>
 ```
 
-Options:
+### `version`
 
-- `--emit <FORMAT>` - Output format: `jit`, `obj`, `asm`, `exe`
-- `--output <FILE>` - Output file path
-- `--release` - Enable optimizations
-- `--target <TRIPLE>` - Target platform triple
-
-### `doc`
-
-Generate documentation from Yarrow source:
+Print the CLI version:
 
 ```bash
-yarrow doc [OPTIONS] <FILE>
+yarrow version
+```
+
+### `clean`
+
+Remove CLI artifacts (object files recorded by previous sessions):
+
+```bash
+yarrow clean
 ```
 
 ## Environment Variables
 
 | Variable       | Description   | Default |
 | -------------- | ------------- | ------- |
-| `YARROW_LOG`   | Logging level | `info`  |
 | `YARROW_COLOR` | Color output  | `auto`  |
 
 ## Exit Codes
@@ -154,9 +164,9 @@ yarrow doc [OPTIONS] <FILE>
 | Code | Meaning                     |
 | ---- | --------------------------- |
 | `0`  | Success                     |
-| `1`  | Compilation/Type errors     |
-| `2`  | Runtime error               |
-| `3`  | Command-line argument error |
+| `1`  | User errors (parsing, execution) |
+| `2`  | Usage / I/O errors           |
+| `101`| Internal errors              |
 
 ## Project Structure
 
@@ -166,10 +176,13 @@ crates/yarrow-cli/
 │   ├── lib.rs          # CLI library
 │   ├── args.rs         # Command-line argument parsing
 │   ├── commands/       # Subcommand implementations
-│   │   ├── run.rs
-│   │   ├── check.rs
+│   │   ├── interpret.rs
+│   │   ├── repl.rs
 │   │   ├── fmt.rs
-│   │   └── ...
+│   │   ├── lsp.rs
+│   │   ├── explain.rs
+│   │   ├── version.rs
+│   │   └── clean.rs
 │   └── main.rs         # Binary entry point
 └── Cargo.toml
 ```
@@ -177,6 +190,6 @@ crates/yarrow-cli/
 ## See Also
 
 - [Yarrow Language Specification](../../docs/GRAMMAR.md)
-- [`yarrow-core`](../yarrow-core/README.md) - Core compiler
+- [`yarrow-core`](../yarrow-core/README.md) - Core interpreter implementation
 - [`yarrow-fmt`](../yarrow-fmt/README.md) - Code formatter
 - [`yarrow-lsp`](../yarrow-lsp/README.md) - Language Server Protocol

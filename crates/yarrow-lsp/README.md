@@ -6,19 +6,21 @@ Language Server Protocol (LSP) implementation for the [Yarrow](https://github.co
 
 `yarrow-lsp` provides IDE integration for `.yar` files by implementing the LSP specification. It communicates over **stdio** (default) or **TCP** (`--listen`), delegating:
 
-- **Analysis** (diagnostics, symbols, definitions, etc.) to [`yarrow-core`](../yarrow-core)
+- **Analysis** (parsing, diagnostics, symbols, definitions, etc.) to [`yarrow-core`](../yarrow-core)
 - **Formatting** to [`yarrow-fmt`](../yarrow-fmt)
+
+Note: Since Yarrow is now interpreter-only without a type checker, the LSP provides AST-based analysis only. Type information and inlay hints are not available.
 
 ## Features
 
 | LSP Feature                     | Supported | Notes                                           |
 | ------------------------------- | --------- | ----------------------------------------------- |
-| `textDocument/diagnostic`       | Yes       | Pull diagnostics via request                    |
-| `workspace/diagnostic`          | Yes       | Full workspace diagnostics                      |
+| `textDocument/diagnostic`       | Yes       | Pull diagnostics via request (parsing only)     |
+| `workspace/diagnostic`          | Yes       | Full workspace diagnostics (parsing only)       |
 | `textDocument/definition`       | Yes       | Go-to-definition for values, types, and modules |
-| `textDocument/hover`            | Yes       | Type and documentation on hover                 |
+| `textDocument/hover`            | Yes       | AST-based signatures on hover                  |
 | `textDocument/completion`       | Yes       | Context-aware completions                       |
-| `textDocument/signatureHelp`    | Yes       | Function signature assistance                   |
+| `textDocument/signatureHelp`    | Yes       | Function signature assistance (AST-based)        |
 | `textDocument/rename`           | Yes       | Symbol renaming with workspace-wide updates     |
 | `textDocument/references`       | Yes       | Find all references to a symbol                 |
 | `textDocument/documentSymbol`   | Yes       | Document outline (symbol hierarchy)             |
@@ -26,10 +28,10 @@ Language Server Protocol (LSP) implementation for the [Yarrow](https://github.co
 | `textDocument/formatting`       | Yes       | Full document formatting                        |
 | `textDocument/onTypeFormatting` | Yes       | Auto-indent on `\n`                             |
 | `textDocument/codeAction`       | Yes       | Quick fixes and refactorings                    |
-| `textDocument/inlayHint`        | Yes       | Inline type hints                               |
+| `textDocument/inlayHint`        | No        | Disabled (requires type checker)                |
 | `textDocument/semanticTokens`   | Yes       | Syntax highlighting via semantic tokens         |
-| Project roots                   | Yes       | Multi-root workspace support                    |
-| Virtual `yarrow-std:` URIs      | Yes       | Embedded standard library access                |
+| Project roots                   | Yes       | Multi-root workspace support (parsing only)     |
+| Virtual `yarrow-std:` URIs      | Partial   | On-disk std library access only                |
 
 ## Installation
 
@@ -111,41 +113,9 @@ Available scenarios:
 
 ## Virtual `yarrow-std:` URIs
 
-Standard library modules are embedded in `yarrow-core`. By default, go-to-definition will resolve to on-disk files in `lib/std/**` when available. When no file exists (e.g., in packaged binaries or when `YARROW_LSP_FORCE_VIRTUAL_STD=1` is set), definitions and hovers resolve to virtual URIs:
+Standard library modules are loaded from on-disk files in `lib/std/**`. By default, go-to-definition will resolve to these files when available.
 
-| Module     | Virtual URI                |
-| ---------- | -------------------------- |
-| `std.io`   | `yarrow-std:/io.yar`       |
-| `std.math` | `yarrow-std:/math.yar`     |
-| `std.mem`  | `yarrow-std:/mem.yar`      |
-| ...        | `yarrow-std:/<module>.yar` |
-
-Clients can fetch virtual file content using the `workspace/textDocumentContent` request:
-
-```json
-{
-	"jsonrpc": "2.0",
-	"id": 1,
-	"method": "workspace/textDocumentContent",
-	"params": {
-		"uri": "yarrow-std:/io.yar"
-	}
-}
-```
-
-The server advertises support for virtual URIs in its capabilities:
-
-```json
-{
-	"experimental": {
-		"textDocumentContent": {
-			"schemes": ["yarrow-std"]
-		}
-	}
-}
-```
-
-**Note:** Virtual buffers are read-only. Requests to modify them (`textDocument/didChange`, format, rename) are ignored or refused. Diagnostics are not published for virtual URIs.
+The `yarrow-std:` URI scheme is no longer supported since virtual std modules are disabled without the compiler.
 
 ## Integration
 

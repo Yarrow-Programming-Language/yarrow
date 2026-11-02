@@ -10,7 +10,6 @@ Runtime library for the [Yarrow](https://github.com/Yarrow-Programming-Language/
 - **Host functions** - Standard library and FFI functions
 - **Type representations** - Runtime type information
 - **Value representations** - How Yarrow values are stored in memory
-- **GC integration** - Garbage collection support (future)
 
 ## Architecture
 
@@ -25,37 +24,13 @@ Yarrow uses a **region-based memory model** with explicit ownership:
 
 ### Value Representation
 
-All Yarrow values are represented using a **tagged union**:
+All Yarrow values are represented using a **tagged union** for the interpreter:
 
-```rust
-pub enum Value {
-    // Primitive types
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Char(char),
-
-    // Composite types
-    Array(Box<[Value]>),
-    Tuple(Box<[Value]>),
-    Struct { fields: BTreeMap<String, Value> },
-
-    // Reference types
-    Ref(*mut Value),           // Raw pointer (unsafe)
-    Borrowed(&'static Value),  // Static reference
-
-    // Function types
-    Function(FunctionPtr),
-    Closure { func: FunctionPtr, captures: Box<[Value]> },
-
-    // Type representations
-    Type(TypeId),
-
-    // Special values
-    Unit,
-    None,
-}
-```
+- **Primitive types**: Int, Float, Bool, Char
+- **Composite types**: Array, Tuple, Struct
+- **Reference types**: Reference (managed pointers)
+- **Function types**: Function pointers and closures
+- **Type representations**: Type IDs
 
 ### Host Functions
 
@@ -69,8 +44,7 @@ fn write_line(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Unit)
 }
 
-// Registered as:
-HOST_FNS.insert("std.io.write_line", write_line);
+// Registered in the runtime
 ```
 
 ## Features
@@ -78,7 +52,7 @@ HOST_FNS.insert("std.io.write_line", write_line);
 ### Heap Management
 
 ```rust
-use yarrow_runtime::heap::Heap;
+use yarrow_runtime::heap::{Heap, Allocator};
 
 let heap = Heap::new();
 
@@ -101,8 +75,7 @@ let my_func: HostFn = |args, heap| {
     Ok(heap.allocate(Value::Int(a + b)))
 };
 
-// Register it
-HostFnRegistry::global().register("my.add", my_func);
+// Register it in the interpreter context
 ```
 
 ### Type System
@@ -128,46 +101,16 @@ let array_type = Type::Array(Box::new(Type::Int));
 | `std.fs`   | File System  | `read_file`, `write_file`, `delete_file`         |
 | `std.os`   | OS           | `args`, `env`, `exit`, `time`                    |
 
-## AOT Compilation
-
-For ahead-of-time compilation, see [`yarrow-runtime-aot`](aot/README.md).
-
-### AOT Static Library
-
-The `aot/` directory contains a static library (`yarrow_runtime_aot`) that:
-
-- Exposes stable, linker-visible symbols for AOT-compiled programs
-- Provides the runtime initialization and cleanup
-- Includes all host functions for standalone executables
-
-## Configuration
-
-### Features
-
-| Feature       | Description                        |
-| ------------- | ---------------------------------- |
-| `default`     | No additional features             |
-| `aot-exports` | Export symbols for AOT compilation |
-
-Enable features in `Cargo.toml`:
-
-```toml
-[dependencies]
-yarrow_runtime = { path = "../yarrow-runtime", features = ["aot-exports"] }
-```
-
 ## Project Structure
 
 ```
 crates/yarrow-runtime/
 ├── src/
 │   └── lib.rs              # Main runtime library
-├── aot/
-│   ├── src/
-│   │   └── lib.rs          # AOT static library
-│   └── Cargo.toml
 └── Cargo.toml
 ```
+
+Note: The `aot/` directory (AOT static library) is no longer used and has been removed since Yarrow is now interpreter-only.
 
 ## Dependencies
 
@@ -213,6 +156,5 @@ match some_operation() {
 
 - [Yarrow Language Specification](../../docs/GRAMMAR.md)
 - [Memory Model](../../docs/MEMORY_MODEL.md)
-- [`yarrow-core`](../yarrow-core/README.md) - Core compiler
+- [`yarrow-core`](../yarrow-core/README.md) - Core interpreter implementation
 - [`yarrow-lsp`](../yarrow-lsp/README.md) - Language Server Protocol
-- [`yarrow-runtime-aot`](aot/README.md) - AOT static library
