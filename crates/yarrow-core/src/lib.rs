@@ -1,3 +1,4 @@
+pub mod checker;
 pub mod diagnostics;
 pub mod entry;
 pub mod interpreter;
@@ -8,6 +9,7 @@ pub mod runtime;
 pub mod session;
 pub mod tokenizer;
 
+pub use checker::{Checker, Declarations, FuncSummary, check_program};
 pub use diagnostics::{
     ColorChoice, DEFAULT_ERROR_LIMIT, Diagnostic, DiagnosticBatch, ExplainEntry, ICE_CODE,
     Severity, SourceFile, Span, explain_code, format_explain, normalize_code, render,

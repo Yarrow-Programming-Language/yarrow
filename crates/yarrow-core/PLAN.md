@@ -202,7 +202,7 @@ Decide first whether the checks belong in a new checker module run by
 interpreter-side validation. A checker module is the better fit because all
 of these are static rules.
 
-- [ ] 3.0 Add the checking pass skeleton: a module that walks the `Program`
+- [x] 3.0 Add the checking pass skeleton: a module that walks the `Program`
   AST with access to registered declarations (structs, enums, unions, error
   types, functions) and emits `DiagnosticBatch` entries, wired into
   `Session::interpret_source` after `parse_source`.

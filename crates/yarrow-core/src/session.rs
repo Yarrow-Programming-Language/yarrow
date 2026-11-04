@@ -34,7 +34,7 @@ impl SessionOptions {
     }
 }
 
-/// Stateful frontend entry point: tokenize -> parse -> interpret.
+/// Stateful frontend entry point: tokenize -> parse -> check -> interpret.
 #[derive(Debug, Clone)]
 pub struct Session {
     pub options: SessionOptions,
@@ -157,6 +157,7 @@ impl Session {
     /// Parse and execute the configured entry on the AST interpreter.
     pub fn interpret_source(&self, source: String) -> Result<RunResult, SessionDiagnostics> {
         let parsed = self.parse_source(source)?;
+        self.check_parsed_program(&parsed)?;
         self.require_main_if_needed(&parsed.file, &parsed.program)?;
 
         let mut ctx = EvalContext::new();
@@ -183,6 +184,23 @@ impl Session {
                 batch: interpret_error_batch(e, self.options.error_limit),
             }),
         }
+    }
+
+    /// Run the static checking pass (PLAN Stage 3) on a parsed program.
+    /// Errors abort the session before interpretation; warnings do not.
+    fn check_parsed_program(&self, parsed: &ParsedProgram) -> Result<(), SessionDiagnostics> {
+        let batch = crate::checker::check_program(
+            &parsed.program,
+            &self.options.source_path,
+            self.options.error_limit,
+        );
+        if batch.has_errors() {
+            return Err(SessionDiagnostics {
+                file: parsed.file.clone(),
+                batch,
+            });
+        }
+        Ok(())
     }
 
     fn require_main_if_needed(
