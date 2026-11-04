@@ -358,7 +358,7 @@ function declared `with |i64 error.Error|` passes the check.
 The spec: union "Members must be distinct". `U union` with two `i32` members
 is accepted today; wrapping and matching silently use the first member.
 
-- [ ] 5.3.1 Reject a union declaration whose member types contain a
+- [x] 5.3.1 Reject a union declaration whose member types contain a
   duplicate (after reference stripping, matching the existing
   `member_ty` normalization) with `E385` at registration, in both the
   interpreter and the checker. Add `E385` to the explain catalog.

@@ -98,6 +98,9 @@ const CODE_SET_IMMUTABLE: &str = "E378";
 /// Diagnostic code reserved for `unwrap` in a non-fallible caller
 /// (PLAN 5.2.2).
 const CODE_UNWRAP_NON_FALLIBLE: &str = "E379";
+/// Diagnostic code reserved for a union whose member types contain a
+/// duplicate (PLAN 5.3.1).
+const CODE_UNION_DUPLICATE_MEMBER: &str = "E385";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -721,6 +724,35 @@ impl Checker {
         }
     }
 
+    /// PLAN 5.3.1: union members must be distinct after reference
+    /// stripping, the same normalization the interpreter's `member_ty`
+    /// applies at registration. The interpreter backstops module units,
+    /// which the checker cannot see.
+    fn check_union_members(&mut self, d: &UnionDecl, span: Span) {
+        let mut seen: Vec<String> = Vec::new();
+        for t in &d.types {
+            let Some(key) = union_member_key(t) else {
+                continue;
+            };
+            if seen.contains(&key) {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_UNION_DUPLICATE_MEMBER,
+                        format!(
+                            "union '{}' declares the member type '{}' more than once",
+                            d.name,
+                            union_member_label(t)
+                        ),
+                    )
+                    .with_primary(span, "")
+                    .with_help("remove the duplicate member, or wrap it in a distinct named type"),
+                );
+            } else {
+                seen.push(key);
+            }
+        }
+    }
+
     /// Snapshot everything the borrow machine mutates across a function.
     fn save_machine(&mut self) -> MachineSnapshot {
         MachineSnapshot {
@@ -854,7 +886,8 @@ impl Checker {
                     self.check_function(f, &fq, true);
                 }
             }
-            StmtKind::Struct(_) | StmtKind::Enum(_) | StmtKind::Union(_) | StmtKind::Error(_) => {}
+            StmtKind::Struct(_) | StmtKind::Enum(_) | StmtKind::Error(_) => {}
+            StmtKind::Union(d) => self.check_union_members(d, stmt.span),
             StmtKind::Require { path, alias } => {
                 if let Some(alias) = alias {
                     self.aliases.insert(alias.clone(), path.clone());
@@ -1828,4 +1861,31 @@ pub fn check_program(program: &Program, path: &str, error_limit: usize) -> Diagn
     let mut checker = Checker::new(path, error_limit);
     checker.check_program(program);
     checker.into_batch()
+}
+
+/// PLAN 5.3.1: normalized union member key, matching the interpreter's
+/// `member_ty`: references strip, and both `string` spellings
+/// (`Primitive(String)` and `Named("string")`) unify. Returns `None` for
+/// member shapes the interpreter rejects at registration; those keep their
+/// existing unsupported-member path.
+fn union_member_key(t: &Type) -> Option<String> {
+    match &t.kind {
+        TypeKind::Primitive(Primitive::String) => Some("string".to_string()),
+        TypeKind::Named(n) if n == "string" => Some("string".to_string()),
+        TypeKind::Primitive(p) => Some(format!("prim:{p:?}")),
+        TypeKind::Named(n) => Some(format!("named:{n}")),
+        TypeKind::Reference { inner } => union_member_key(inner),
+        _ => None,
+    }
+}
+
+/// Human-readable name of a union member type, for the `E385` message.
+/// Mirrors the interpreter's `member_ty_label`.
+fn union_member_label(t: &Type) -> String {
+    match &t.kind {
+        TypeKind::Reference { inner } => union_member_label(inner),
+        TypeKind::Named(n) => n.clone(),
+        TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
+        _ => "member".to_string(),
+    }
 }

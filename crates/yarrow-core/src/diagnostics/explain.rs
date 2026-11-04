@@ -164,6 +164,16 @@ exports do not collide. The diagnostic names the unit that declared the \
 type first and the unit that redeclares it.",
     },
     ExplainEntry {
+        code: "E385",
+        title: "duplicate union member type",
+        body: "\
+Union members must be distinct. Two members that normalize to the same type \
+(after reference stripping, so `i32` and `reference<i32>` collide) cannot be \
+distinguished when wrapping or matching, which is why the declaration is \
+rejected. Remove the duplicate member, or wrap one side in a distinct named \
+type.",
+    },
+    ExplainEntry {
         code: "E386",
         title: "unknown error type in fallible signature",
         body: "\

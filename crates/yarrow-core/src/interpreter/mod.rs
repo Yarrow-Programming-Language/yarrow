@@ -832,6 +832,21 @@ impl Interpreter {
         for t in &d.types {
             members.push(self.member_ty(t)?);
         }
+        // PLAN 5.3.1: union members must be distinct after the reference
+        // stripping `member_ty` already applies.
+        for (i, m) in members.iter().enumerate() {
+            if members[..i].contains(m) {
+                return Err(InterpretError::new(
+                    format!(
+                        "union '{}' declares the member type '{}' more than once",
+                        d.name,
+                        self.member_ty_label(m)
+                    ),
+                    Span::default(),
+                    "E385",
+                ));
+            }
+        }
         self.unions.push(UnionInfo {
             name: d.name.clone(),
             members,
@@ -855,6 +870,30 @@ impl Interpreter {
                 format!("union member {t:?}"),
                 Span::default(),
             )),
+        }
+    }
+
+    /// Human-readable name of a union member type, for the `E385` message.
+    fn member_ty_label(&self, m: &MemberTy) -> String {
+        match m {
+            MemberTy::String => "string".to_string(),
+            MemberTy::Named(n) => n.clone(),
+            MemberTy::Primitive(kind) => match *kind & 0xff {
+                0 => "bool".to_string(),
+                1 => "i8".to_string(),
+                2 => "i16".to_string(),
+                3 => "i32".to_string(),
+                4 => "i64".to_string(),
+                6 => "u8".to_string(),
+                7 => "u16".to_string(),
+                8 => "u32".to_string(),
+                9 => "u64".to_string(),
+                11 => "rune".to_string(),
+                12 => "f16".to_string(),
+                13 => "f32".to_string(),
+                14 => "f64".to_string(),
+                _ => format!("kind {kind}"),
+            },
         }
     }
 
