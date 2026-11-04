@@ -6,6 +6,18 @@ use std::path::PathBuf;
 use crate::diagnostics::Span;
 use crate::parser::ast::Program;
 
+// Std modules embedded at build time by `build.rs`, as a built-in fallback
+// search source: explicit `-L` paths take precedence over these.
+include!(concat!(env!("OUT_DIR"), "/std_modules.rs"));
+
+/// Look up a dotted module path in the embedded std table.
+fn embedded_source(path: &str) -> Option<&'static str> {
+    STD_MODULES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, source)| *source)
+}
+
 /// Error from module loading.
 #[derive(Debug, Clone)]
 pub struct ModuleError {
@@ -63,14 +75,23 @@ impl ModuleLoader {
         }
 
         // Try to resolve the module path
-        let fs_path = self.resolve_path(path)?;
-        let source = std::fs::read_to_string(&fs_path).map_err(|e| {
-            ModuleError::new(
-                format!("failed to read module '{}': {}", path, e),
-                span,
-                "E380",
-            )
-        })?;
+        let fs_path = self.resolve_path(path);
+        let source = match fs_path {
+            Ok(fs_path) => std::fs::read_to_string(&fs_path).map_err(|e| {
+                ModuleError::new(
+                    format!("failed to read module '{}': {}", path, e),
+                    span,
+                    "E380",
+                )
+            })?,
+            // Fall back to the embedded std modules when no search path
+            // matches, so `std.*` resolves without `-L`.
+            Err(_) => embedded_source(path)
+                .ok_or_else(|| {
+                    ModuleError::new(format!("module '{}' not found", path), span, "E380")
+                })?
+                .to_string(),
+        };
         self.source_cache.insert(path.to_string(), source.clone());
         Ok(source)
     }
@@ -89,7 +110,7 @@ impl ModuleLoader {
                 return Some(source);
             }
         }
-        None
+        embedded_source(path).map(str::to_string)
     }
 
     fn resolve_path(&mut self, path: &str) -> Result<PathBuf, ModuleError> {
