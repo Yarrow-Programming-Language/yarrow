@@ -315,7 +315,7 @@ diagnostic pointing at the offending word, and every file in
 
 ### 4.1 Division and modulo by zero
 
-- [ ] 4.1.1 Replace the bare `wrapping_div` / `wrapping_rem` calls in
+- [x] 4.1.1 Replace the bare `wrapping_div` / `wrapping_rem` calls in
   `eval_int_bin` with a zero check that raises a user diagnostic (new code in
   the `E33x` range) instead of the current ICE surfaced by the Rust panic.
 

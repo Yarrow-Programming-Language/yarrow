@@ -3972,14 +3972,32 @@ impl Interpreter {
                 value: Value::Int(a.wrapping_mul(b)),
                 kind,
             },
-            Mod => Slot {
-                value: Value::Int(a.wrapping_rem(b)),
-                kind,
-            },
-            Fdiv => Slot {
-                value: Value::Int(a.wrapping_div(b)),
-                kind,
-            },
+            Mod => {
+                if b == 0 {
+                    return Err(InterpretError::new(
+                        "integer remainder '%' by zero",
+                        span,
+                        "E337",
+                    ));
+                }
+                Slot {
+                    value: Value::Int(a.wrapping_rem(b)),
+                    kind,
+                }
+            }
+            Fdiv => {
+                if b == 0 {
+                    return Err(InterpretError::new(
+                        "integer floor division '//' by zero",
+                        span,
+                        "E337",
+                    ));
+                }
+                Slot {
+                    value: Value::Int(a.wrapping_div(b)),
+                    kind,
+                }
+            }
             Pow => {
                 if b < 0 {
                     return Err(InterpretError::new(

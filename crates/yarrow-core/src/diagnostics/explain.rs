@@ -98,6 +98,15 @@ integer `^` or an explicit conversion if you need exponentiation on integers \
 first.",
     },
     ExplainEntry {
+        code: "E337",
+        title: "integer division or remainder by zero",
+        body: "\
+`//` (floor division) and `%` (remainder) are integer operations with no \
+value defined for a zero divisor. Check the divisor before dividing, or use \
+`/` for true division, which follows IEEE float rules and yields `inf` or \
+`nan` instead of failing.",
+    },
+    ExplainEntry {
         code: "E382",
         title: "module dependency cycle",
         body: "\
