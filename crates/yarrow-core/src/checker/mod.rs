@@ -35,6 +35,16 @@
 //!   `static` declaration with no initializer at all (it would bind the
 //!   runtime stack).
 //!
+//! PLAN 3.5 (unsafe boundary) makes the unsafe escapes visible at check
+//! time. An unsafe context is an `unsafe ... end` block or an `unsafe
+//! function` body; the borrow and ownership rules above stay active inside
+//! it (the unsafe walk uses the same machine):
+//!
+//! - E370: a call to an `unsafe function` outside an unsafe context.
+//! - E370: an unsafe operation outside an unsafe context: the `@alloc`,
+//!   `@free`, `@load`, `@store` builtins, `load` / `store` through
+//!   `pointer<T>`, and pointer arithmetic (`+` / `-` over a pointer).
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -67,6 +77,9 @@ const CODE_DUP_NON_COPY: &str = "E371";
 /// Diagnostic code reserved for a non-constant `static` initializer
 /// (PLAN 3.4.1).
 const CODE_STATIC_NON_CONST: &str = "E377";
+/// Diagnostic code reserved for an unsafe operation outside an unsafe
+/// context (PLAN 3.5).
+const CODE_UNSAFE_OUTSIDE: &str = "E370";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -153,8 +166,11 @@ impl BorrowKey {
 enum Slot {
     /// Owned heap temporary; the stack frees it at pop / drop / consume.
     Owned(u32),
-    /// Copy value: integers, floats, bool, rune, enum, array, pointer, type.
+    /// Copy value: integers, floats, bool, rune, enum, array, type.
     Copy,
+    /// `pointer<T>` value: a copy value whose arithmetic is pointer
+    /// arithmetic (PLAN 3.5.2).
+    Pointer,
     /// Live borrow of a value (from the `borrow` word or a non-copy read).
     Borrow(BorrowKey),
     /// Opaque value: call results, foreign values, reference reads.
@@ -166,6 +182,9 @@ enum Slot {
 struct VarInfo {
     /// Copy types push a copy on read; non-copy types push a borrow.
     is_copy: bool,
+    /// `pointer<T>` binding: reading it pushes a pointer slot, so `+` /
+    /// `-` over it is pointer arithmetic (PLAN 3.5.2).
+    is_pointer: bool,
     /// `reference<T>` binding: may hold a live borrow of another value.
     is_reference: bool,
     /// Named struct type, for method call resolution.
@@ -497,6 +516,7 @@ impl Checker {
     /// Bind `name` to the value described by `slot`, with the shape of `ty`.
     fn bind_var(&mut self, name: &str, ty: &Type, slot: Slot) {
         let is_copy = self.is_copy_type(ty);
+        let is_pointer = matches!(ty.kind, TypeKind::Pointer { .. });
         let is_reference = matches!(ty.kind, TypeKind::Reference { .. });
         let struct_name = match &ty.kind {
             TypeKind::Named(n) if self.decls.is_struct(n) => Some(n.clone()),
@@ -506,6 +526,7 @@ impl Checker {
             name,
             VarInfo {
                 is_copy,
+                is_pointer,
                 is_reference,
                 struct_name,
                 holds: None,
@@ -555,6 +576,7 @@ impl Checker {
         for param in &f.params {
             let slot = match &param.ty.kind {
                 TypeKind::Reference { .. } => Slot::Unknown,
+                TypeKind::Pointer { .. } => Slot::Pointer,
                 _ if self.is_copy_type(&param.ty) => Slot::Copy,
                 _ => Slot::Owned(self.fresh_temp()),
             };
@@ -574,6 +596,7 @@ impl Checker {
                 "self".to_string(),
                 VarInfo {
                     is_copy: false,
+                    is_pointer: false,
                     is_reference: true,
                     struct_name,
                     holds: None,
@@ -1063,7 +1086,8 @@ impl Checker {
         self.bind_var_info(
             target,
             VarInfo {
-                is_copy: matches!(slot, Slot::Copy),
+                is_copy: matches!(slot, Slot::Copy | Slot::Pointer),
+                is_pointer: matches!(slot, Slot::Pointer),
                 is_reference: false,
                 struct_name: None,
                 holds: None,
@@ -1169,13 +1193,9 @@ impl Checker {
             Expr::Binary { op, left, right } => {
                 self.check_expr(left, span);
                 self.check_expr(right, span);
-                self.pop_n(2);
-                self.push_result_of_bin(*op);
+                self.apply_bin(*op, span);
             }
-            Expr::ApplyBin(op) => {
-                self.pop_n(2);
-                self.push_result_of_bin(*op);
-            }
+            Expr::ApplyBin(op) => self.apply_bin(*op, span),
             Expr::Unary { operand, .. } => {
                 self.check_expr(operand, span);
                 self.pop_n(1);
@@ -1203,19 +1223,29 @@ impl Checker {
             Expr::ApplyBorrow => self.apply_borrow(span),
             Expr::Load { inner } => {
                 self.check_expr(inner, span);
+                self.require_unsafe(span, "load through pointer<T>");
                 self.pop_n(1);
                 self.push_slot(Slot::Unknown);
             }
             Expr::ApplyLoad => {
+                self.require_unsafe(span, "load through pointer<T>");
                 self.pop_n(1);
                 self.push_slot(Slot::Unknown);
             }
             Expr::Store { addr, value } => {
                 self.check_expr(addr, span);
                 self.check_expr(value, span);
+                self.require_unsafe(span, "store through pointer<T>");
                 self.pop_n(2);
             }
-            Expr::Builtin { .. } => self.unknown_call(),
+            Expr::Builtin { name } => {
+                // PLAN 3.5.2: the raw memory builtins are unsafe
+                // operations.
+                if matches!(name.as_str(), "alloc" | "free" | "load" | "store") {
+                    self.require_unsafe(span, &format!("@{name}"));
+                }
+                self.unknown_call();
+            }
             Expr::StackOp(op) => self.check_stack_op(*op, span),
             Expr::Array(elements) => {
                 for element in elements {
@@ -1287,7 +1317,11 @@ impl Checker {
             // borrow, so this creates no tracked borrow.
             self.push_slot(Slot::Unknown);
         } else if var.is_copy {
-            self.push_slot(Slot::Copy);
+            self.push_slot(if var.is_pointer {
+                Slot::Pointer
+            } else {
+                Slot::Copy
+            });
         } else {
             let slot = self.create_borrow(BorrowKey::Var(name.to_string()), span);
             self.push_slot(slot);
@@ -1337,7 +1371,13 @@ impl Checker {
         match target {
             Expr::Variable { name } => match self.resolve_function(name) {
                 Some(summary) => {
-                    let (params, returns) = (summary.param_count, summary.return_count);
+                    let (is_unsafe, params, returns) =
+                        (summary.is_unsafe, summary.param_count, summary.return_count);
+                    // PLAN 3.5.1: calling an `unsafe function` needs an
+                    // unsafe context.
+                    if is_unsafe {
+                        self.require_unsafe(span, &format!("call to unsafe function '{name}'"));
+                    }
                     self.pop_n(params);
                     for _ in 0..returns {
                         self.push_slot(Slot::Unknown);
@@ -1370,7 +1410,16 @@ impl Checker {
                         if let Some(struct_name) = &var.struct_name {
                             let fq = format!("{struct_name}::{member}");
                             if let Some(summary) = self.decls.function(&fq) {
-                                let (params, returns) = (summary.param_count, summary.return_count);
+                                let (is_unsafe, params, returns) =
+                                    (summary.is_unsafe, summary.param_count, summary.return_count);
+                                // PLAN 3.5.1: calling an `unsafe function`
+                                // needs an unsafe context.
+                                if is_unsafe {
+                                    self.require_unsafe(
+                                        span,
+                                        &format!("call to unsafe function '{fq}'"),
+                                    );
+                                }
                                 self.pop_n(params);
                                 for _ in 0..returns {
                                     self.push_slot(Slot::Unknown);
@@ -1414,18 +1463,48 @@ impl Checker {
                 self.push_slot(slot);
             }
             Some(slot @ Slot::Borrow(_)) => self.push_slot(slot),
-            Some(slot @ Slot::Copy) => self.push_slot(slot),
+            Some(slot @ (Slot::Copy | Slot::Pointer)) => self.push_slot(slot),
             Some(slot @ Slot::Unknown) => self.push_slot(slot),
             None => self.push_slot(Slot::Unknown),
         }
     }
 
-    fn push_result_of_bin(&mut self, op: BinOp) {
+    /// Pop two operands and push the binary result. `+` / `-` over a
+    /// pointer is pointer arithmetic (PLAN 3.5.2): it needs an unsafe
+    /// context and the result stays a pointer.
+    fn apply_bin(&mut self, op: BinOp, span: Span) {
+        let rhs = self.stack.get(self.stack.len().saturating_sub(1)).cloned();
+        let lhs = self.stack.get(self.stack.len().saturating_sub(2)).cloned();
+        let pointer_arith = matches!(op, BinOp::Plus | BinOp::Minus)
+            && (matches!(lhs, Some(Slot::Pointer)) || matches!(rhs, Some(Slot::Pointer)));
+        if pointer_arith {
+            self.require_unsafe(span, "pointer arithmetic");
+        }
+        self.pop_n(2);
         if op == BinOp::Concat {
             let temp = self.fresh_temp();
             self.push_slot(Slot::Owned(temp));
+        } else if pointer_arith {
+            self.push_slot(Slot::Pointer);
         } else {
             self.push_slot(Slot::Copy);
+        }
+    }
+
+    /// PLAN 3.5: `what` needs an unsafe context: an `unsafe ... end` block
+    /// or an `unsafe function` body. E370 names both escapes.
+    fn require_unsafe(&mut self, span: Span, what: &str) {
+        if self.unsafe_depth == 0 {
+            self.emit(
+                Diagnostic::error(
+                    CODE_UNSAFE_OUTSIDE,
+                    format!(
+                        "{what} requires an unsafe context: wrap it in 'unsafe ... end' \
+                         or mark the enclosing function 'unsafe function'"
+                    ),
+                )
+                .with_primary(span, ""),
+            );
         }
     }
 
@@ -1467,7 +1546,7 @@ impl Checker {
                     self.emit_dup_non_copy(span);
                     self.push_slot(Slot::Borrow(key));
                 }
-                Some(slot @ Slot::Copy) => self.push_slot(slot),
+                Some(slot @ (Slot::Copy | Slot::Pointer)) => self.push_slot(slot),
                 Some(slot @ Slot::Unknown) => self.push_slot(slot),
                 None => self.push_slot(Slot::Unknown),
             },

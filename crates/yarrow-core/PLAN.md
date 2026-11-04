@@ -287,12 +287,24 @@ runtime stack and is rejected the same way. The diagnostic code is E377.
 
 ### 3.5 Unsafe boundary
 
-- [ ] 3.5.1 Reject calls to `unsafe function`s outside an `unsafe ... end`
+Decision: an unsafe context is an `unsafe ... end` block or an `unsafe
+function` body; the checker tracks both with one depth counter. Unsafe
+operations are the raw memory builtins (`@alloc`, `@free`, `@load`,
+`@store`), the typed pointer words `load` / `store`, and pointer arithmetic
+(`+` / `-` with a pointer operand, tracked as a pointer slot on the
+abstract operand stack). Calls resolve through the checker's function
+table: plain names, nested names, and struct methods; module functions
+behind `require` aliases stay opaque, so an unsafe `std.mem` function is
+not flagged at the call site. The diagnostic is E370 (already in the
+explain catalog). Borrow and ownership rules run unchanged inside unsafe
+contexts.
+
+- [x] 3.5.1 Reject calls to `unsafe function`s outside an `unsafe ... end`
   block.
-- [ ] 3.5.2 Reject unsafe operations (`@alloc`, `@free`, `@load`, `@store`,
+- [x] 3.5.2 Reject unsafe operations (`@alloc`, `@free`, `@load`, `@store`,
   `load`, `store` on `pointer<T>`, `pointer` arithmetic) outside an unsafe
   block or an unsafe function body.
-- [ ] 3.5.3 Keep borrow and ownership checks active inside unsafe blocks, as
+- [x] 3.5.3 Keep borrow and ownership checks active inside unsafe blocks, as
   the grammar requires.
 
 Acceptance for stage 3: each rule rejects a small probe program with a
