@@ -96,6 +96,17 @@ so neither can be a `set` target. Re-declare the name with `mutable`, or bind \
 a new `mutable` variable for the updated value.",
     },
     ExplainEntry {
+        code: "E379",
+        title: "unwrap in a non-fallible caller",
+        body: "\
+`unwrap` propagates a failure to the caller, so the enclosing function must \
+declare a fallible return (`with |payload error|`). Declare the return \
+fallible, or recover in place with `handle ... fallback ... end` instead. \
+`handle` is allowed anywhere; only `unwrap` is restricted. The check covers \
+calls to functions visible in the unit; results the checker cannot see \
+(module functions) keep the runtime check.",
+    },
+    ExplainEntry {
         code: "E334",
         title: "integer-only remainder and power",
         body: "\

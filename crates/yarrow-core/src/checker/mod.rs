@@ -45,6 +45,14 @@
 //!   `@free`, `@load`, `@store` builtins, `load` / `store` through
 //!   `pointer<T>`, and pointer arithmetic (`+` / `-` over a pointer).
 //!
+//! PLAN 5.2 (unwrap in a non-fallible caller) tracks the fallibility of
+//! the function being checked (Stage 4 predicate):
+//!
+//! - E379: `unwrap` over a call to a visible fallible function in a
+//!   function whose own return is not fallible. The rule covers what the
+//!   checker can see; opaque operands (module calls, builtins, variables)
+//!   keep the runtime E308 backstop, and `handle` is allowed anywhere.
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -87,6 +95,9 @@ const CODE_UNKNOWN_ERROR_TYPE: &str = "E386";
 /// Diagnostic code reserved for `set` on a `const` or `static` binding
 /// (PLAN 5.1.1).
 const CODE_SET_IMMUTABLE: &str = "E378";
+/// Diagnostic code reserved for `unwrap` in a non-fallible caller
+/// (PLAN 5.2.2).
+const CODE_UNWRAP_NON_FALLIBLE: &str = "E379";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -105,6 +116,9 @@ pub struct FuncSummary {
     pub param_count: usize,
     /// Number of declared return types (`with ...`).
     pub return_count: usize,
+    /// PLAN 5.2.1: the `with` return is the fallible `|payload error|`
+    /// form (Stage 4 predicate), so the call result is an error envelope.
+    pub fallible: bool,
 }
 
 /// Declarations registered from one program unit, mirroring what
@@ -247,6 +261,9 @@ pub struct Checker {
     aliases: HashMap<String, String>,
     /// Fully-qualified name of the function being checked ("" at top level).
     caller_fq: String,
+    /// PLAN 5.2.1: whether the function being checked declares a fallible
+    /// return (Stage 4 predicate). Top level is never fallible.
+    caller_fallible: bool,
 }
 
 impl Checker {
@@ -265,6 +282,7 @@ impl Checker {
             next_temp: 0,
             aliases: HashMap::new(),
             caller_fq: String::new(),
+            caller_fallible: false,
         }
     }
 
@@ -316,7 +334,9 @@ impl Checker {
     // -----------------------------------------------------------------
 
     /// First pass: collect declarations without checking bodies, mirroring
-    /// `Interpreter::register_unit` for the main unit.
+    /// `Interpreter::register_unit` for the main unit. Types register before
+    /// functions so a function's fallibility (PLAN 5.2.1) resolves bare
+    /// error-type names no matter where the declaration sits in the file.
     fn register_decls(&mut self, program: &Program) {
         for item in &program.items {
             match &item.kind {
@@ -332,6 +352,11 @@ impl Checker {
                 StmtKind::Error(d) => {
                     self.decls.error_types.insert(d.name.clone(), d.clone());
                 }
+                _ => {}
+            }
+        }
+        for item in &program.items {
+            match &item.kind {
                 StmtKind::Implement(imp) => {
                     for f in &imp.functions {
                         let fq = format!("{}::{}", imp.target, f.name);
@@ -347,6 +372,10 @@ impl Checker {
     /// Register one function and its nested functions under their
     /// fully-qualified names, matching `Interpreter::register_function_tree`.
     fn register_function(&mut self, fq: &str, f: &Function, is_method: bool) {
+        let fallible = matches!(
+            classify_signature(&f.returns, &|n| self.resolves_error_type(n)),
+            Signature::Fallible { .. }
+        );
         self.decls.functions.insert(
             fq.to_string(),
             FuncSummary {
@@ -355,6 +384,7 @@ impl Checker {
                 is_method,
                 param_count: f.params.len(),
                 return_count: f.returns.len(),
+                fallible,
             },
         );
         for stmt in &f.body {
@@ -596,7 +626,9 @@ impl Checker {
     fn check_function(&mut self, f: &Function, fq: &str, is_method: bool) {
         let saved = self.save_machine();
         self.caller_fq = fq.to_string();
-        self.check_return_signature(f);
+        // PLAN 5.2.1: fallibility of the function being checked, via the
+        // Stage 4 predicate (the same call also emits E386, PLAN 4.2).
+        self.caller_fallible = self.check_return_signature(f);
 
         for param in &f.params {
             let slot = match &param.ty.kind {
@@ -646,26 +678,36 @@ impl Checker {
     /// main-unit declarations only: a bare name resolves when this unit
     /// declares it as an error type, and a module-qualified path is
     /// resolved by the interpreter after module loading.
-    fn check_return_signature(&mut self, f: &Function) {
+    ///
+    /// PLAN 5.2.1: returns whether the signature is the fallible form, so
+    /// the caller's `unwrap` rule can consult it.
+    fn check_return_signature(&mut self, f: &Function) -> bool {
         let signature = classify_signature(&f.returns, &|n| self.resolves_error_type(n));
-        let Signature::UnknownError { name } = signature else {
-            return;
-        };
-        let span = f
-            .returns
-            .first()
-            .map(|t| Span::from_location(t.location))
-            .unwrap_or_default();
-        self.emit(
-            Diagnostic::error(
-                CODE_UNKNOWN_ERROR_TYPE,
-                format!("unknown error type '{name}' in the signature of '{}'", f.name),
-            )
-            .with_primary(span, "")
-            .with_help(
-                "require the module that declares the error type, or declare the error type in this unit",
-            ),
-        );
+        match signature {
+            Signature::Fallible { .. } => true,
+            Signature::NonFallible => false,
+            Signature::UnknownError { name } => {
+                let span = f
+                    .returns
+                    .first()
+                    .map(|t| Span::from_location(t.location))
+                    .unwrap_or_default();
+                self.emit(
+                    Diagnostic::error(
+                        CODE_UNKNOWN_ERROR_TYPE,
+                        format!(
+                            "unknown error type '{name}' in the signature of '{}'",
+                            f.name
+                        ),
+                    )
+                    .with_primary(span, "")
+                    .with_help(
+                        "require the module that declares the error type, or declare the error type in this unit",
+                    ),
+                );
+                false
+            }
+        }
     }
 
     /// PLAN 4.1: error-side resolution visible to the checker. A bare name
@@ -692,6 +734,7 @@ impl Checker {
             live: std::mem::take(&mut self.live),
             aliases: std::mem::take(&mut self.aliases),
             caller_fq: std::mem::take(&mut self.caller_fq),
+            caller_fallible: self.caller_fallible,
         }
     }
 
@@ -701,6 +744,7 @@ impl Checker {
         self.live = saved.live;
         self.aliases = saved.aliases;
         self.caller_fq = saved.caller_fq;
+        self.caller_fallible = saved.caller_fallible;
     }
 
     fn check_body(&mut self, body: &[Stmt]) {
@@ -1294,6 +1338,32 @@ impl Checker {
             }
             Expr::Call { target } => self.check_call(target, span),
             Expr::Unwrap { inner } => {
+                // PLAN 5.2.2: `unwrap` propagates a failure to the caller,
+                // so the caller must declare a fallible return. The checker
+                // rejects it only when the operand is statically an error
+                // envelope (a call to a visible fallible function); opaque
+                // operands keep the runtime E308 backstop.
+                if !self.caller_fallible && self.unwrap_operand_is_envelope(inner) {
+                    let caller = if self.caller_fq.is_empty() {
+                        "the top level".to_string()
+                    } else {
+                        format!("'{}'", self.caller_fq)
+                    };
+                    self.emit(
+                        Diagnostic::error(
+                            CODE_UNWRAP_NON_FALLIBLE,
+                            format!(
+                                "unwrap propagates an error to the caller, but {caller} \
+                                 cannot error: no fallible return is declared"
+                            ),
+                        )
+                        .with_primary(span, "")
+                        .with_help(
+                            "declare the return `with |payload error|`, or recover in place \
+                             with `handle ... fallback ... end`",
+                        ),
+                    );
+                }
                 self.check_expr(inner, span);
                 self.pop_n(1);
                 self.push_slot(Slot::Unknown);
@@ -1541,6 +1611,37 @@ impl Checker {
         self.decls.function(name)
     }
 
+    /// PLAN 5.2.2: whether the operand of `unwrap` is statically an error
+    /// envelope: a call to a function visible to the checker whose return
+    /// is the fallible form. Module calls and builtins are opaque (the
+    /// runtime E308 backstops them), and so is any other operand word;
+    /// `unwrap` on such a value is the identity no-op the runtime defines.
+    fn unwrap_operand_is_envelope(&self, inner: &Expr) -> bool {
+        let Expr::Call { target } = inner else {
+            return false;
+        };
+        match target.as_ref() {
+            Expr::Variable { name } => self.resolve_function(name).is_some_and(|f| f.fallible),
+            Expr::Member { base, member } => {
+                let Expr::Variable { name } = base.as_ref() else {
+                    return false;
+                };
+                if self.aliases.contains_key(name) {
+                    return false;
+                }
+                let Some(struct_name) = self
+                    .lookup_var(name)
+                    .and_then(|var| var.struct_name.clone())
+                else {
+                    return false;
+                };
+                let fq = format!("{struct_name}::{member}");
+                self.decls.function(&fq).is_some_and(|f| f.fallible)
+            }
+            _ => false,
+        }
+    }
+
     /// `typeof` releases the borrow of a borrowed heap value and pushes the
     /// type value.
     fn apply_typeof(&mut self) {
@@ -1718,6 +1819,7 @@ struct MachineSnapshot {
     live: HashMap<BorrowKey, usize>,
     aliases: HashMap<String, String>,
     caller_fq: String,
+    caller_fallible: bool,
 }
 
 /// Check one parsed program and return the collected diagnostics (PLAN 3.0

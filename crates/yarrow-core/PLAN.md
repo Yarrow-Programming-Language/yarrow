@@ -328,12 +328,26 @@ the `set`; the same probe with `mutable` prints `5`; `50 s static i64` then
 The spec: "if the caller could not error, unwrap would be a compile error".
 Today this is a runtime `E308` after interpretation has started.
 
-- [ ] 5.2.1 Track the fallibility of the function being checked (its
+Recorded implementation decisions (5.2):
+
+- The rule fires where the checker can see the error-carrying operand:
+  an `unwrap` whose operand is a call to a function visible to the
+  checker (main unit, nested, or method) whose signature is fallible.
+  That operand is statically an error envelope, so unwrapping it in a
+  non-fallible caller is `E379`.
+- Opaque operands (module calls such as `list.push_last`, builtins,
+  variables) stay allowed: `unwrap` on a non-error value is the identity
+  no-op the runtime defines, and the corpus relies on that
+  (`xs 4 list.push_last call unwrap` in a non-fallible `main`). The
+  runtime `E308` remains the backstop for envelopes the checker cannot
+  see, exactly like the borrow machine's opacity simplification.
+
+- [x] 5.2.1 Track the fallibility of the function being checked (its
   return union, via the Stage 4 predicate) in the checker.
-- [ ] 5.2.2 Reject `Expr::Unwrap` in a function whose return is not
+- [x] 5.2.2 Reject `Expr::Unwrap` in a function whose return is not
   fallible with `E379`, keeping the existing runtime `E308` as a backstop.
   Add `E379` to the explain catalog.
-- [ ] 5.2.3 `handle` stays allowed anywhere; only `unwrap` is restricted.
+- [x] 5.2.3 `handle` stays allowed anywhere; only `unwrap` is restricted.
 
 Acceptance: a non-fallible `main` that does `f call unwrap` fails at check
 time with `E379` and no interpretation happens; the same call inside a
