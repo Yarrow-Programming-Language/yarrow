@@ -172,19 +172,19 @@ carrier kind, so `c typeof i32 ==` is `true` for a default enum. The spec
 says `typeof` pushes the value's static type; for an enum value that is the
 enum type, distinct from its carrier.
 
-- [ ] 3.1.1 Give enum values a kind code that identifies the enum itself
+- [x] 3.1.1 Give enum values a kind code that identifies the enum itself
   (for example a dedicated tag with the enum id in the high bits, mirroring
   `KIND_STRUCT`), while keeping the stored bits as the carrier value so
   container and field layouts do not change size.
-- [ ] 3.1.2 Update `named_type_kind_code` so the type value `Color` pushes
+- [x] 3.1.2 Update `named_type_kind_code` so the type value `Color` pushes
   the enum's own kind code, making `c typeof Color ==` push `true` and
   `c typeof i32 ==` push `false`.
-- [ ] 3.1.3 Update every consumer of the raw carrier kind on enum slots:
+- [x] 3.1.3 Update every consumer of the raw carrier kind on enum slots:
   struct field layout (fields stay carrier-sized), list and map element
   kinds, `dup` (enum is a copy type), integer operators on enum values
   (comparisons such as `dup Color.RED ==` must keep working), and
   `bits_to_slot` round-trips through containers.
-- [ ] 3.1.4 `typeof` on an enum value still releases a borrow exactly as it
+- [x] 3.1.4 `typeof` on an enum value still releases a borrow exactly as it
   does today (the `apply_typeof` ownership path is unchanged).
 
 Acceptance: `Color.RED c const Color` then `c typeof Color ==` pushes

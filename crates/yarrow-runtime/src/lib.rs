@@ -44,6 +44,8 @@ use std::sync::Mutex;
 /// * `0x70` — a union; union id in bits 8.. . The union block stores the
 ///   active member's index (a tag) and an inline payload; the member kind
 ///   codes are registered via `yarrow_register_union_descs`.
+/// * `0x80` — an enum; enum id in bits 8.. . The stored bits are the
+///   carrier value (an integer discriminant), so there is nothing to free.
 pub const KIND_STRING: u64 = 16;
 pub const KIND_LIST: u64 = 0x20;
 pub const KIND_MAP: u64 = 0x30;
@@ -51,6 +53,7 @@ pub const KIND_STRUCT: u64 = 0x40;
 pub const KIND_PTR: u64 = 0x50;
 pub const KIND_ARRAY: u64 = 0x60;
 pub const KIND_UNION: u64 = 0x70;
+pub const KIND_ENUM: u64 = 0x80;
 
 /// Byte offsets inside a union block, in sync with the compiler's
 /// `emit_union_wrap`.

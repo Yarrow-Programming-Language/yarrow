@@ -59,7 +59,7 @@ use crate::parser::literals::{
 use crate::parser::parse;
 use crate::result::RunResult;
 use crate::runtime::{
-    self, FieldDesc, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT, KIND_UNION,
+    self, FieldDesc, KIND_ENUM, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT, KIND_UNION,
     UNION_PAYLOAD_OFFSET, UNION_TAG_OFFSET, free_value,
 };
 use crate::tokenizer::Tokenizer;
@@ -250,6 +250,7 @@ struct UnionInfo {
 
 #[derive(Debug, Clone)]
 struct EnumInfo {
+    name: String,
     /// Runtime kind code of the underlying carrier (default `i32`).
     carrier: u64,
 }
@@ -656,6 +657,8 @@ impl Interpreter {
                 } else if let Some(id) = self.union_ids.get(n) {
                     Ok((KIND_UNION | ((*id as u64) << 8), 8, 8))
                 } else if let Some(id) = self.enum_ids.get(n) {
+                    // PLAN 3.1: the field kind identifies the enum itself so
+                    // reads report the enum type; storage stays carrier-sized.
                     let carrier = self.enums.get(*id as usize).map_or(3, |e| e.carrier);
                     let (size, align) = match carrier {
                         1 | 6 => (1, 1),
@@ -663,7 +666,7 @@ impl Interpreter {
                         3 | 8 => (4, 4),
                         _ => (8, 8),
                     };
-                    Ok((carrier, size, align))
+                    Ok((KIND_ENUM | ((*id as u64) << 8), size, align))
                 } else {
                     Err(InterpretError::unsupported(
                         format!("field type '{n}'"),
@@ -724,7 +727,10 @@ impl Interpreter {
             self.enum_members
                 .insert((d.name.clone(), m.name.clone()), v as i64);
         }
-        self.enums.push(EnumInfo { carrier });
+        self.enums.push(EnumInfo {
+            name: d.name.clone(),
+            carrier,
+        });
         Ok(())
     }
 
@@ -1476,6 +1482,21 @@ impl Interpreter {
         }
     }
 
+    /// Member type of a runtime slot, for union wrapping. PLAN 3.1: an enum
+    /// slot maps back to the named enum type, not its carrier.
+    fn slot_member_ty(&self, slot: &Slot) -> MemberTy {
+        if (slot.kind & 0xff) == KIND_ENUM
+            && let Some(info) = self.enums.get((slot.kind >> 8) as usize)
+        {
+            return MemberTy::Named(info.name.clone());
+        }
+        match slot.kind & 0xff {
+            KIND_STRING => MemberTy::String,
+            k if k <= 15 => MemberTy::Primitive(k),
+            _ => MemberTy::Primitive(slot.kind),
+        }
+    }
+
     /// Function-scope exit: run deferred bodies in reverse registration order.
     /// Nested scopes already ran their defers at their own exit, so normally
     /// only the function-body scope remains; any leftover scopes run
@@ -2194,7 +2215,7 @@ impl Interpreter {
                         "E394",
                     ));
                 }
-                let elem_kind = (iterable.kind >> 8) & 0xff;
+                let elem_kind = iterable.kind >> 8;
                 let len = runtime::yarrow_list_len(handle);
                 for i in 0..len {
                     while stack.len() > pre {
@@ -2203,7 +2224,7 @@ impl Interpreter {
                     let bits = runtime::yarrow_list_get(handle, i);
                     let elem_slot = Slot {
                         kind: elem_kind,
-                        value: match elem_kind {
+                        value: match elem_kind & 0xff {
                             KIND_STRING => Value::Str {
                                 handle: bits,
                                 owned: false,
@@ -2513,14 +2534,15 @@ impl Interpreter {
                         return Ok(());
                     }
                     if let Some(v) = self.enum_members.get(&(name.clone(), member.clone())) {
-                        let carrier = self
+                        // PLAN 3.1: the slot's kind identifies the enum, not
+                        // the carrier; the stored bits stay the discriminant.
+                        let kind = self
                             .enum_ids
                             .get(name)
-                            .and_then(|id| self.enums.get(*id as usize))
-                            .map_or(4, |e| e.carrier);
+                            .map_or(4, |id| KIND_ENUM | ((*id as u64) << 8));
                         stack.push(Slot {
                             value: Value::Int(*v),
-                            kind: carrier,
+                            kind,
                         });
                         return Ok(());
                     }
@@ -2729,7 +2751,7 @@ impl Interpreter {
                     }
                 };
                 let bits = val.value.as_bits().unwrap_or(0);
-                write_bits_at(addr, 0, pointee_byte_size(pointee), bits);
+                write_bits_at(addr, 0, self.pointee_size(pointee), bits);
                 match val.value {
                     Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
                     other => other.drop_owned(),
@@ -2759,6 +2781,19 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Byte size of a pointee value. PLAN 3.1: an enum pointee is sized by
+    /// its carrier, which only the interpreter can resolve from the enum id.
+    fn pointee_size(&self, kind: u64) -> u32 {
+        if (kind & 0xff) == KIND_ENUM {
+            let carrier = self
+                .enums
+                .get((kind >> 8) as usize)
+                .map_or(3, |e| e.carrier);
+            return kind_elem_size(carrier);
+        }
+        pointee_byte_size(kind)
+    }
+
     /// `pointer<T> load`: pop a typed pointer and push the pointee bits.
     fn eval_ptr_load(&self, stack: &mut Vec<Slot>, span: Span) -> IResult<()> {
         let addr_slot = self.pop(stack, span, "'load'")?;
@@ -2782,7 +2817,7 @@ impl Interpreter {
                 ));
             }
         };
-        let bits = read_bits_at(addr, 0, pointee_byte_size(pointee));
+        let bits = read_bits_at(addr, 0, self.pointee_size(pointee));
         addr_slot.drop_owned();
         stack.push(self.bits_to_slot_kind(bits, pointee, false));
         Ok(())
@@ -4643,7 +4678,7 @@ impl Interpreter {
             .unions
             .get(uid as usize)
             .ok_or_else(|| InterpretError::new(format!("unknown union id {uid}"), span, "E346"))?;
-        let from = slot_member_ty(&slot);
+        let from = self.slot_member_ty(&slot);
         let idx = info
             .members
             .iter()
@@ -4721,7 +4756,9 @@ impl Interpreter {
             return Some(KIND_UNION | ((*id as u64) << 8));
         }
         if let Some(id) = self.enum_ids.get(name) {
-            return Some(self.enums.get(*id as usize).map_or(3, |e| e.carrier));
+            // PLAN 3.1: the type value of an enum is the enum's own kind
+            // code, so `c typeof Color ==` compares enum against enum.
+            return Some(KIND_ENUM | ((*id as u64) << 8));
         }
         if self.error_type_ids.contains_key(name) {
             return Some(KIND_ERROR);
@@ -4772,6 +4809,12 @@ impl Interpreter {
                             owned,
                         },
                         kind: KIND_UNION | ((*id as u64) << 8),
+                    }
+                } else if let Some(id) = self.enum_ids.get(n) {
+                    // PLAN 3.1: an enum payload reads back as the enum type.
+                    Slot {
+                        value: Value::Int(bits as i64),
+                        kind: KIND_ENUM | ((*id as u64) << 8),
                     }
                 } else {
                     Slot {
@@ -4980,14 +5023,6 @@ fn ast_member_ty(t: &Type) -> MemberTy {
         TypeKind::Named(n) => MemberTy::Named(n.clone()),
         TypeKind::Reference { inner } => ast_member_ty(inner),
         _ => MemberTy::Primitive(4),
-    }
-}
-
-fn slot_member_ty(slot: &Slot) -> MemberTy {
-    match slot.kind & 0xff {
-        KIND_STRING => MemberTy::String,
-        k if k <= 15 => MemberTy::Primitive(k),
-        _ => MemberTy::Primitive(slot.kind),
     }
 }
 
