@@ -38,6 +38,17 @@ Raw pointers, `mem.allocate` / `free` / `load` / `store`, and calls to \
 `unsafe` does not turn off type, stack, ownership, or borrow checking.",
     },
     ExplainEntry {
+        code: "E371",
+        title: "dup on a non-copy type",
+        body: "\
+`dup` bitwise-duplicates copy types only: integers, floats, bool, rune, \
+enum, `array<T N>`, and `pointer<T>`.
+
+For `string`, `list<T>`, `hashmap<K V>`, unions, and structs, duplicate \
+access goes through `borrow` (or `move` to transfer ownership) instead of \
+`dup`.",
+    },
+    ExplainEntry {
         code: "E373",
         title: "use after move",
         body: "\

@@ -22,6 +22,11 @@
 //! - E373: use of a variable after `move` transferred its value.
 //! - E374: `move` of a variable whose value has a live borrow.
 //!
+//! PLAN 3.3 (copy rules) restricts `dup` to copy types:
+//!
+//! - E371: `dup` over an owned heap temporary or a live borrow, both of
+//!   which are non-copy values (borrows of copy values stay copies).
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -49,6 +54,8 @@ const CODE_OWNER_WHILE_BORROWED: &str = "E374";
 const CODE_USE_AFTER_MOVE: &str = "E373";
 /// Diagnostic code reserved for `move` of an owner while borrowed (PLAN 3.2.2).
 const CODE_MOVE_WHILE_BORROWED: &str = "E374";
+/// Diagnostic code reserved for `dup` on a non-copy type (PLAN 3.3.1).
+const CODE_DUP_NON_COPY: &str = "E371";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -1205,19 +1212,43 @@ impl Checker {
         }
     }
 
+    /// PLAN 3.3.1: `dup` on a non-copy value. The stack effect is still
+    /// modeled so one mistake yields one diagnostic, not a cascade.
+    fn emit_dup_non_copy(&mut self, span: Span) {
+        self.emit(
+            Diagnostic::error(
+                CODE_DUP_NON_COPY,
+                "dup applies to copy types only: borrow the value instead of duplicating it",
+            )
+            .with_primary(span, ""),
+        );
+    }
+
     /// Stack manipulation words.
     fn check_stack_op(&mut self, op: StackOp, span: Span) {
         match op {
             StackOp::Dup => match self.stack.last().cloned() {
-                // Duplicating an owned heap value pushes a borrow of it
-                // (the runtime clones the handle unowned).
+                // PLAN 3.3.1: an owned heap temporary is a non-copy value;
+                // `dup` is restricted to copy types. Report it, then keep
+                // the PLAN 3.1 modeling (the runtime clones the handle
+                // unowned) so the rest of the walk sees the stack it would
+                // see without the rule.
                 Some(Slot::Owned(temp)) => {
-                    let slot = self.create_borrow(BorrowKey::Temp(temp), span);
-                    self.push_slot(slot);
+                    self.emit_dup_non_copy(span);
+                    let key = BorrowKey::Temp(temp);
+                    if !self.is_live(&key) {
+                        self.live.insert(key.clone(), self.scopes.len() - 1);
+                    }
+                    self.push_slot(Slot::Borrow(key));
                 }
+                // A borrow is always of a heap value (borrows of copy
+                // values stay copies), so this is also a non-copy `dup`.
+                // Push the borrow without re-registering it: the original
+                // borrow is already live, and a second E375 here would
+                // cascade.
                 Some(Slot::Borrow(key)) => {
-                    let slot = self.create_borrow(key, span);
-                    self.push_slot(slot);
+                    self.emit_dup_non_copy(span);
+                    self.push_slot(Slot::Borrow(key));
                 }
                 Some(slot @ Slot::Copy) => self.push_slot(slot),
                 Some(slot @ Slot::Unknown) => self.push_slot(slot),

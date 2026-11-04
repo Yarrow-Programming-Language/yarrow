@@ -245,7 +245,19 @@ one mistake yields one diagnostic, not a cascade.
 
 ### 3.3 Copy rules
 
-- [ ] 3.3.1 Reject `dup` on non-copy types (string, list, hashmap, unions,
+Decision: the parser resolves `dup` written directly after a concrete value
+word at parse time (it clones the word, which is what makes the
+`i dup 1 + set` idiom work), so those `dup`s never reach the check as stack
+ops. The rule therefore applies to the `dup` words that survive as
+`StackOp::Dup`: a `dup` over an owned heap temporary or over a live borrow is
+a non-copy `dup` (borrows of copy values stay copies in the checker's model)
+and is rejected with E371; opaque slots stay unchecked to avoid false
+positives. A `dup` right after a non-copy variable read (`s dup`) is caught
+by the single-borrow rule (E375) because the parser clones the read; the
+stack effect of a rejected `dup` is still modeled so one mistake yields one
+diagnostic.
+
+- [x] 3.3.1 Reject `dup` on non-copy types (string, list, hashmap, unions,
   structs); the grammar restricts `dup` to copy types and points to `borrow`
   for the rest.
 
