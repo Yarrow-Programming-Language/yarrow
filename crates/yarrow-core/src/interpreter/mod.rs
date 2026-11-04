@@ -49,9 +49,9 @@ use std::path::PathBuf;
 use crate::diagnostics::Span;
 use crate::modules::{ModuleLoader, RequiredModule};
 use crate::parser::ast::{
-    BinOp, EnumDecl, ErrorDecl, Expr, Function, Implement, MatchCase, MatchCaseKind, ParamModifier,
-    Primitive, Program, StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnOp, UnionDecl,
-    Visibility,
+    BinOp, EnumDecl, ErrorDecl, Expr, Function, Implement, MatchCase, MatchCaseKind, Mutability,
+    ParamModifier, Primitive, Program, StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnOp,
+    UnionDecl, Visibility,
 };
 use crate::parser::literals::{
     decode_float_literal, decode_int_literal, decode_rune_literal, decode_string_literal,
@@ -274,6 +274,10 @@ struct LoopCtx {
 
 struct Frame {
     locals: HashMap<String, Slot>,
+    /// Declared mutability per local (PLAN 5.1.2): `set` is restricted to
+    /// `mutable` bindings. Names bound outside a declaration (`self` at
+    /// call entry, `move` targets) default to `mutable`.
+    local_mutability: HashMap<String, Mutability>,
     loops: Vec<LoopCtx>,
     /// `defer` bodies, one entry per active scope (innermost last). Each
     /// scope runs its registered bodies in reverse order at its exit; the
@@ -1284,6 +1288,7 @@ impl Interpreter {
         let error_payload = self.fallible_payload(&entry.function.returns, &local_aliases);
         let mut frame = Frame {
             locals: HashMap::new(),
+            local_mutability: HashMap::new(),
             loops: Vec::new(),
             deferred: vec![Vec::new()],
             error_payload: error_payload.clone(),
@@ -1657,8 +1662,14 @@ impl Interpreter {
             | StmtKind::Union(_)
             | StmtKind::Error(_) => Ok(Flow::Next),
             StmtKind::VarDecl {
-                name, ty, value, ..
+                name,
+                mutability,
+                ty,
+                value,
             } => {
+                // PLAN 5.1.2: record the declared mutability before anything
+                // else, so the `self` re-binding below carries it too.
+                frame.local_mutability.insert(name.clone(), *mutability);
                 // Method receiver already bound at call entry.
                 if name == "self" && frame.locals.contains_key("self") {
                     return Ok(Flow::Next);
@@ -1752,6 +1763,28 @@ impl Interpreter {
                 let mut slot = self.pop(stack, stmt.span, "set")?;
                 match target {
                     Expr::Variable { name } => {
+                        // PLAN 5.1.2: `set` is restricted to `mutable`
+                        // bindings; this backstops the checker for paths
+                        // that reach the interpreter unchecked.
+                        let mutability = frame
+                            .local_mutability
+                            .get(name)
+                            .copied()
+                            .unwrap_or(Mutability::Mutable);
+                        if matches!(mutability, Mutability::Const | Mutability::Static) {
+                            return Err(InterpretError::new(
+                                format!(
+                                    "cannot set '{name}': the binding is {}, not mutable",
+                                    match mutability {
+                                        Mutability::Const => "const",
+                                        Mutability::Static => "static",
+                                        Mutability::Mutable => unreachable!(),
+                                    }
+                                ),
+                                stmt.span,
+                                "E378",
+                            ));
+                        }
                         let old = frame.locals.get(name).cloned().ok_or_else(|| {
                             InterpretError::new(
                                 format!("unknown variable '{name}'"),

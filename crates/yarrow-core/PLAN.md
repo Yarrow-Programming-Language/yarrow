@@ -309,14 +309,14 @@ The spec allows `set` on `mutable` only: `const` is set once at runtime (its
 initializer) and `static` is a compile-time constant. Today `5 c set` on a
 const binding is accepted.
 
-- [ ] 5.1.1 Record mutability in the checker's `VarInfo` (from the
+- [x] 5.1.1 Record mutability in the checker's `VarInfo` (from the
   declaration's `Mutability`) and reject `StmtKind::Set` whose target is a
   `const` or `static` binding with `E378`.
-- [ ] 5.1.2 Record mutability alongside the interpreter's frame locals as
+- [x] 5.1.2 Record mutability alongside the interpreter's frame locals as
   well and reject the assignment at runtime with the same code, so the rule
   also holds for paths that reach the interpreter without the checker (the
   REPL and `EvalContext`).
-- [ ] 5.1.3 A re-declaration of the same name rebinds it with the new
+- [x] 5.1.3 A re-declaration of the same name rebinds it with the new
   mutability; only `set` is restricted. Add `E378` to the explain catalog.
 
 Acceptance: `100 c const i64` then `5 c set` fails with `E378` pointing at

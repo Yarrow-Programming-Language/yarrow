@@ -84,6 +84,9 @@ const CODE_UNSAFE_OUTSIDE: &str = "E370";
 /// Diagnostic code reserved for an unresolvable error side in a fallible
 /// signature (PLAN 4.2).
 const CODE_UNKNOWN_ERROR_TYPE: &str = "E386";
+/// Diagnostic code reserved for `set` on a `const` or `static` binding
+/// (PLAN 5.1.1).
+const CODE_SET_IMMUTABLE: &str = "E378";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -210,6 +213,9 @@ struct VarInfo {
     /// `move` transferred the value away: further use is E373 (PLAN 3.2.1).
     /// A `set` or a re-declaration re-owns the name and clears the flag.
     moved: bool,
+    /// Mutability of the declaration (PLAN 5.1.1): `set` is restricted to
+    /// `mutable` bindings.
+    mutability: Mutability,
 }
 
 /// One lexical scope: its variables die (and release held borrows) at exit.
@@ -529,8 +535,9 @@ impl Checker {
         }
     }
 
-    /// Bind `name` to the value described by `slot`, with the shape of `ty`.
-    fn bind_var(&mut self, name: &str, ty: &Type, slot: Slot) {
+    /// Bind `name` to the value described by `slot`, with the shape of `ty`
+    /// and the declared mutability.
+    fn bind_var(&mut self, name: &str, ty: &Type, mutability: Mutability, slot: Slot) {
         let is_copy = self.is_copy_type(ty);
         let is_pointer = matches!(ty.kind, TypeKind::Pointer { .. });
         let is_reference = matches!(ty.kind, TypeKind::Reference { .. });
@@ -547,6 +554,7 @@ impl Checker {
                 struct_name,
                 holds: None,
                 moved: false,
+                mutability,
             },
             slot,
         );
@@ -618,6 +626,7 @@ impl Checker {
                     struct_name,
                     holds: None,
                     moved: false,
+                    mutability: Mutability::Mutable,
                 },
             );
         }
@@ -729,7 +738,7 @@ impl Checker {
                     None => self.pop_slot_raw(),
                 }
                 .unwrap_or(Slot::Unknown);
-                self.bind_var(name, ty, slot);
+                self.bind_var(name, ty, *mutability, slot);
             }
             StmtKind::Set { target, value } => {
                 if let Some(value) = value {
@@ -739,6 +748,28 @@ impl Checker {
                 if let Expr::Variable { name } = target
                     && let Some(var) = self.lookup_var(name).cloned()
                 {
+                    // PLAN 5.1.1: `set` is restricted to `mutable`
+                    // bindings; `const` is set once at runtime (its
+                    // initializer) and `static` is a compile-time constant.
+                    if matches!(var.mutability, Mutability::Const | Mutability::Static) {
+                        let kind = match var.mutability {
+                            Mutability::Const => "const",
+                            Mutability::Static => "static",
+                            Mutability::Mutable => unreachable!(),
+                        };
+                        self.emit(
+                            Diagnostic::error(
+                                CODE_SET_IMMUTABLE,
+                                format!(
+                                    "cannot `set` '{name}': the binding is {kind}, not mutable"
+                                ),
+                            )
+                            .with_primary(stmt.span, "")
+                            .with_help(
+                                "re-declare the name with `mutable`, or use a `mutable` binding",
+                            ),
+                        );
+                    }
                     let mut info = var;
                     // The old value is dropped: a borrow it held ends.
                     if let Some(key) = info.holds.take() {
@@ -1147,6 +1178,7 @@ impl Checker {
                 struct_name: None,
                 holds: None,
                 moved: false,
+                mutability: Mutability::Mutable,
             },
             slot,
         );

@@ -87,6 +87,15 @@ Variable reads, calls, and runtime words (`borrow`, `load`, `store`, \
 computed at runtime.",
     },
     ExplainEntry {
+        code: "E378",
+        title: "set on a const or static binding",
+        body: "\
+`set` reassigns `mutable` bindings only. A `const` binding is set once at \
+runtime (its initializer) and a `static` binding is a compile-time constant, \
+so neither can be a `set` target. Re-declare the name with `mutable`, or bind \
+a new `mutable` variable for the updated value.",
+    },
+    ExplainEntry {
         code: "E334",
         title: "integer-only remainder and power",
         body: "\
