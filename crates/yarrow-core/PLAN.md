@@ -133,13 +133,14 @@ resolve; an unknown member fails.
 
 ### 2.3 `T copy` parameter modifier
 
-- [ ] 2.3.1 Act on `ParamModifier::Copy` in `call_function`: deep-copy heap
+- [x] 2.3.1 Act on `ParamModifier::Copy` in `call_function`: deep-copy heap
   arguments (string, list, map, struct, union) before binding them, so the
   callee cannot mutate the caller's value.
-- [ ] 2.3.2 Leave the default (no modifier) as the current borrow-on-read
+- [x] 2.3.2 Leave the default (no modifier) as the current borrow-on-read
   behavior, matching the grammar's "parameters move onto the local stack".
-- [ ] 2.3.3 Decide and document the interaction with `mutable` receivers
-  (`reference<T> mutable`), which must keep mutating the pointee.
+- [x] 2.3.3 Decide and document the interaction with `mutable` receivers
+  (`reference<T> mutable`), which must keep mutating the pointee. Decision:
+  the method receiver is exempt from `copy`; `self` always borrows.
 
 Acceptance: a function declared with `list<i32> copy` that pushes into its
 parameter leaves the caller's list unchanged.

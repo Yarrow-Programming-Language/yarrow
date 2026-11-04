@@ -642,6 +642,161 @@ pub unsafe extern "C" fn yarrow_register_union_descs(id: u32, ptr: *const u64, c
 }
 
 // ---------------------------------------------------------------------------
+// Generic clone
+// ---------------------------------------------------------------------------
+
+/// Byte size of a value of the given kind, mirroring the compiler's element
+/// sizing (heap kinds are 8-byte handles).
+fn kind_size(kind: u64) -> usize {
+    match tag(kind) {
+        0 | 1 | 6 => 1,
+        2 | 7 | 12 => 2,
+        3 | 8 | 11 | 13 => 4,
+        _ => 8,
+    }
+}
+
+/// Deep-clone a value, driven by the same kind codes as [`free_value`].
+/// Scalars and pointers are returned unchanged (their bits are the value);
+/// strings, lists, maps, structs, and unions are copied recursively.
+///
+/// Union payloads clone deeply only when the union's member kinds are
+/// registered (see [`yarrow_register_union_descs`]); otherwise the payload
+/// handle is shared, matching `free_value`'s treatment of unregistered
+/// unions. Fixed arrays share their storage: the runtime does not track their
+/// element count, and their elements are scalars.
+pub extern "C" fn yarrow_value_clone(v: u64, kind: u64) -> u64 {
+    if v == 0 {
+        return 0;
+    }
+    match tag(kind) {
+        0..=15 | KIND_PTR => v,
+        KIND_STRING => clone_str(v),
+        KIND_LIST => clone_list(v, kind >> 8),
+        KIND_MAP => clone_map(v, (kind >> 8) & 0xffffffff, kind >> 40),
+        KIND_STRUCT => clone_struct(v, (kind >> 8) as u32),
+        KIND_ARRAY => v,
+        KIND_UNION => clone_union(v, (kind >> 8) as u32),
+        _ => v,
+    }
+}
+
+fn clone_str(s: u64) -> u64 {
+    unsafe {
+        let str = &*(s as *const Str);
+        yarrow_str_new(str.ptr as u64, str.len as u64)
+    }
+}
+
+fn clone_list(l: u64, elem_kind: u64) -> u64 {
+    unsafe {
+        let list = &*(l as *const List);
+        let new = yarrow_list_new(list.elem_size as u64);
+        let recurse = tag(elem_kind) > 15 && elem_kind != KIND_PTR;
+        for i in 0..list.len {
+            let elem = read_elem(list, i);
+            let elem = if recurse {
+                yarrow_value_clone(elem, elem_kind)
+            } else {
+                elem
+            };
+            yarrow_list_push(new, elem);
+        }
+        new
+    }
+}
+
+fn clone_map(m: u64, key_kind: u64, val_kind: u64) -> u64 {
+    unsafe {
+        let map = &*(m as *const Map);
+        let new = yarrow_map_new(map.keys_string as u64);
+        let clone_keys = tag(key_kind) > 15 && key_kind != KIND_PTR;
+        let clone_vals = tag(val_kind) > 15 && val_kind != KIND_PTR;
+        for i in 0..map.cap {
+            if *map.used.add(i) == 0 {
+                continue;
+            }
+            let key = *map.keys.add(i);
+            let val = *map.vals.add(i);
+            let key = if clone_keys {
+                yarrow_value_clone(key, key_kind)
+            } else {
+                key
+            };
+            let val = if clone_vals {
+                yarrow_value_clone(val, val_kind)
+            } else {
+                val
+            };
+            yarrow_map_insert(new, key, val);
+        }
+        new
+    }
+}
+
+/// Clone a struct block: copy the storage byte-for-byte, then replace every
+/// heap field with a clone of the original field. The block size is derived
+/// from the registered field descriptors (an upper bound of the compiler's
+/// aligned layout), so a missing registration leaves the block shared rather
+/// than guessing a size.
+fn clone_struct(s: u64, id: u32) -> u64 {
+    let descs = match STRUCT_DESCS.lock().unwrap().get(&id) {
+        Some(d) => d.clone(),
+        None => return s,
+    };
+    let mut size = 0usize;
+    for d in &descs {
+        size = size.max(d.offset as usize + kind_size(d.kind));
+    }
+    size = size.max(1);
+    let new = unsafe { libc::malloc(size) } as u64;
+    unsafe { std::ptr::copy_nonoverlapping(s as *const u8, new as *mut u8, size) };
+    for d in &descs {
+        if tag(d.kind) <= 15 || d.kind == KIND_PTR {
+            continue;
+        }
+        unsafe {
+            let field =
+                std::ptr::read_unaligned((s as *const u8).add(d.offset as usize) as *const u64);
+            let cloned = yarrow_value_clone(field, d.kind);
+            std::ptr::write_unaligned((new as *mut u8).add(d.offset as usize) as *mut u64, cloned);
+        }
+    }
+    new
+}
+
+/// Clone a union block: copy the active-member tag, then clone the payload
+/// with the registered member kind (shared when no kind is registered).
+fn clone_union(u: u64, id: u32) -> u64 {
+    unsafe {
+        let active =
+            std::ptr::read_unaligned((u as *const u8).add(UNION_TAG_OFFSET as usize) as *const u64);
+        let payload = std::ptr::read_unaligned(
+            (u as *const u8).add(UNION_PAYLOAD_OFFSET as usize) as *const u64
+        );
+        let member_kind = UNION_DESCS
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|d| d.get(active as usize).copied());
+        let payload = match member_kind {
+            Some(k) if tag(k) > 15 && k != KIND_PTR => yarrow_value_clone(payload, k),
+            _ => payload,
+        };
+        let new = yarrow_alloc(16);
+        std::ptr::write_unaligned(
+            (new as *mut u8).add(UNION_TAG_OFFSET as usize) as *mut u64,
+            active,
+        );
+        std::ptr::write_unaligned(
+            (new as *mut u8).add(UNION_PAYLOAD_OFFSET as usize) as *mut u64,
+            payload,
+        );
+        new
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Regions
 // ---------------------------------------------------------------------------
 

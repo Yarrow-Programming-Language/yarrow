@@ -38,8 +38,9 @@ use std::path::PathBuf;
 use crate::diagnostics::Span;
 use crate::modules::{ModuleLoader, RequiredModule};
 use crate::parser::ast::{
-    BinOp, EnumDecl, ErrorDecl, Expr, Function, Implement, MatchCase, MatchCaseKind, Primitive,
-    Program, StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnOp, UnionDecl, Visibility,
+    BinOp, EnumDecl, ErrorDecl, Expr, Function, Implement, MatchCase, MatchCaseKind, ParamModifier,
+    Primitive, Program, StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnOp, UnionDecl,
+    Visibility,
 };
 use crate::parser::literals::{
     decode_float_literal, decode_int_literal, decode_rune_literal, decode_string_literal,
@@ -1039,6 +1040,22 @@ impl Interpreter {
         }
         let args: Vec<Slot> = stack.split_off(stack.len() - n);
         let mut local_stack = args;
+        // `T copy` parameters receive a deep copy of the heap argument so the
+        // callee cannot mutate the caller's value. The method receiver is
+        // exempt: `reference<T> mutable` receivers must keep mutating the
+        // pointee, so `self` always borrows. The default (no modifier) keeps
+        // the grammar's move-on-call behavior.
+        for (i, param) in entry.function.params.iter().enumerate() {
+            if !matches!(param.modifier, Some(ParamModifier::Copy)) {
+                continue;
+            }
+            if entry.is_method && i == 0 {
+                continue;
+            }
+            if let Some(arg) = local_stack.get_mut(i) {
+                self.deep_copy_arg(arg);
+            }
+        }
         let error_payload = fallible_payload(&entry.function.returns, &self.error_type_ids);
         let mut frame = Frame {
             locals: HashMap::new(),
@@ -1198,6 +1215,98 @@ impl Interpreter {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Replace a `T copy` argument in place with a deep copy (PLAN 2.3.1).
+    /// Heap arguments (string, list, map, struct, union) are cloned through
+    /// the host runtime; the original is freed only when the caller passed an
+    /// owned temporary, since a borrow stays owned by the caller's variable.
+    /// Non-heap arguments are left as-is.
+    fn deep_copy_arg(&self, slot: &mut Slot) {
+        let (handle, owned, kind) = match &slot.value {
+            Value::Str { handle, owned } => (*handle, *owned, KIND_STRING),
+            Value::Heap { handle, owned } => {
+                if !matches!(
+                    slot.kind & 0xff,
+                    KIND_LIST | KIND_MAP | KIND_STRUCT | KIND_UNION
+                ) {
+                    return;
+                }
+                (*handle, *owned, slot.kind)
+            }
+            _ => return,
+        };
+        // Union payloads need the active member's kind, which only the
+        // interpreter can resolve (union layouts are not registered with
+        // the host runtime).
+        let clone = if kind & 0xff == KIND_UNION {
+            self.clone_union_handle(handle, (kind >> 8) as u32)
+        } else {
+            runtime::yarrow_value_clone(handle, kind)
+        };
+        if owned {
+            free_value(handle, kind);
+        }
+        slot.value = if kind == KIND_STRING {
+            Value::Str {
+                handle: clone,
+                owned: true,
+            }
+        } else {
+            Value::Heap {
+                handle: clone,
+                owned: true,
+            }
+        };
+    }
+
+    /// Deep-copy a union block: clone the active member's payload using the
+    /// member's kind code. Unions nested inside containers are cloned by the
+    /// runtime without member kinds and share the payload handle, matching
+    /// `free_value`'s treatment of unregistered unions.
+    fn clone_union_handle(&self, handle: u64, uid: u32) -> u64 {
+        let active = unsafe {
+            std::ptr::read_unaligned(
+                (handle as *const u8).add(UNION_TAG_OFFSET as usize) as *const u64
+            )
+        };
+        let payload = unsafe {
+            std::ptr::read_unaligned(
+                (handle as *const u8).add(UNION_PAYLOAD_OFFSET as usize) as *const u64
+            )
+        };
+        let member_kind = self
+            .unions
+            .get(uid as usize)
+            .and_then(|u| u.members.get(active as usize))
+            .and_then(|m| self.member_ty_kind_code(m));
+        let payload = match member_kind {
+            Some(k) if (k & 0xff) > 15 && (k & 0xff) != KIND_PTR => {
+                runtime::yarrow_value_clone(payload, k)
+            }
+            _ => payload,
+        };
+        let clone = runtime::yarrow_alloc(16);
+        unsafe {
+            std::ptr::write_unaligned(
+                (clone as *mut u8).add(UNION_TAG_OFFSET as usize) as *mut u64,
+                active,
+            );
+            std::ptr::write_unaligned(
+                (clone as *mut u8).add(UNION_PAYLOAD_OFFSET as usize) as *mut u64,
+                payload,
+            );
+        }
+        clone
+    }
+
+    /// Runtime kind code of a union member type, for payload clone/free.
+    fn member_ty_kind_code(&self, m: &MemberTy) -> Option<u64> {
+        match m {
+            MemberTy::String => Some(KIND_STRING),
+            MemberTy::Primitive(k) => Some(*k),
+            MemberTy::Named(n) => self.named_type_kind_code(n),
         }
     }
 
@@ -4187,6 +4296,14 @@ impl Interpreter {
     }
 
     fn wrap_union_value(&self, slot: Slot, uid: u32, span: Span) -> IResult<Slot> {
+        // A value that is already this union type binds as-is (union
+        // parameters and same-type assignments must not re-wrap).
+        if (slot.kind & 0xff) == KIND_UNION
+            && (slot.kind >> 8) as u32 == uid
+            && matches!(slot.value, Value::Heap { .. })
+        {
+            return Ok(slot);
+        }
         let info = self
             .unions
             .get(uid as usize)
