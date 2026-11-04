@@ -107,6 +107,16 @@ value defined for a zero divisor. Check the divisor before dividing, or use \
 `nan` instead of failing.",
     },
     ExplainEntry {
+        code: "E381",
+        title: "array size cannot be inferred",
+        body: "\
+`array<T>` without a written size `N` infers `N` from a non-empty array \
+literal initializer (`[10 20 30] xs const array<i32>` binds `array<i32 3>`). \
+An empty literal leaves nothing to infer from, so `[] xs const array<i32>` \
+is rejected. Write the size explicitly (`array<i32 0>`) or start from a \
+non-empty literal. An explicitly written `N` always wins over inference.",
+    },
+    ExplainEntry {
         code: "E382",
         title: "module dependency cycle",
         body: "\

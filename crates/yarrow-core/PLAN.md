@@ -88,14 +88,15 @@ The spec says the array size `N` "may be inferred from a non-empty literal".
 `array<i32>` parses with `size: None` today, but the binding records count
 `0` in the slot kind, discarding the literal's length.
 
-- [ ] 1.3.1 In the `VarDecl` binding path, when the declared type is
+- [x] 1.3.1 In the `VarDecl` binding path, when the declared type is
   `array<T>` with no size and the initializer is a non-empty array literal,
   record the literal's element count as the array's `N` in the bound slot's
   kind code (the `count << 40` field).
-- [ ] 1.3.2 An explicitly written `N` always wins over inference, and an
+- [x] 1.3.2 An explicitly written `N` always wins over inference, and an
   empty literal with no declared `N` is rejected with a clear diagnostic
-  (there is nothing to infer from).
-- [ ] 1.3.3 Inference applies to `mutable`, `const`, and `static` bindings
+  (there is nothing to infer from). The diagnostic is `E381` (assigned by
+  this task; added to the explain catalog with it).
+- [x] 1.3.3 Inference applies to `mutable`, `const`, and `static` bindings
   alike; the `static` constant rule (E377) is unaffected because array
   literals are constant words.
 

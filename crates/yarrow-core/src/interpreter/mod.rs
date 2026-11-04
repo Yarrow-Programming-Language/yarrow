@@ -1542,7 +1542,7 @@ impl Interpreter {
                 let kind = self.type_kind_code(ty).ok_or_else(|| {
                     InterpretError::unsupported(format!("binding type {ty:?}"), stmt.span)
                 })?;
-                let slot = match value {
+                let mut slot = match value {
                     Some(Expr::StructLit(pairs)) => {
                         self.eval_struct_lit(pairs, ty, stack, frame, module, caller_fq, stmt.span)?
                     }
@@ -1600,6 +1600,22 @@ impl Interpreter {
                         s
                     }
                 };
+                // PLAN 1.3: `array<T>` with no declared size infers `N` from
+                // a non-empty array literal. An explicit `N` always wins
+                // (inference only runs for `size: None`); an empty literal
+                // leaves nothing to infer from.
+                if let TypeKind::Array { size: None, .. } = &ty.kind
+                    && let Value::Array(elems) = &slot.value
+                {
+                    if elems.is_empty() {
+                        return Err(InterpretError::new(
+                            "cannot infer the array size: the literal is empty and no size is declared",
+                            stmt.span,
+                            "E381",
+                        ));
+                    }
+                    slot.kind = kind | ((elems.len() as u64) << 40);
+                }
                 if let Some(old) = frame.locals.insert(name.clone(), slot) {
                     old.drop_owned();
                 }
