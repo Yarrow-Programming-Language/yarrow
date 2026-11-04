@@ -3991,8 +3991,16 @@ impl Interpreter {
                         "E337",
                     ));
                 }
+                let r = a.wrapping_rem(b);
+                // Remainder consistent with floor division: it takes the
+                // divisor's sign, so `a == (a // b) * b + a % b` holds.
+                let r = if r != 0 && ((r < 0) != (b < 0)) {
+                    r.wrapping_add(b)
+                } else {
+                    r
+                };
                 Slot {
-                    value: Value::Int(a.wrapping_rem(b)),
+                    value: Value::Int(r),
                     kind,
                 }
             }
@@ -4004,8 +4012,16 @@ impl Interpreter {
                         "E337",
                     ));
                 }
+                let (q, r) = (a.wrapping_div(b), a.wrapping_rem(b));
+                // Floor division: round the truncated quotient toward negative
+                // infinity when signs differ and the remainder is nonzero.
+                let q = if r != 0 && ((r < 0) != (b < 0)) {
+                    q.wrapping_sub(1)
+                } else {
+                    q
+                };
                 Slot {
-                    value: Value::Int(a.wrapping_div(b)),
+                    value: Value::Int(q),
                     kind,
                 }
             }
