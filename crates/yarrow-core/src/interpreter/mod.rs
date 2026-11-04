@@ -1867,9 +1867,22 @@ impl Interpreter {
                 Ok(())
             }
             Expr::Variable { name } => {
-                let local = frame.locals.get(name).ok_or_else(|| {
-                    InterpretError::new(format!("unknown variable '{name}'"), span, "E320")
-                })?;
+                let Some(local) = frame.locals.get(name) else {
+                    // A bare name with no local binding but a registered type
+                    // is a type value (e.g. the `Point` in `p typeof Point ==`).
+                    if let Some(kind) = self.named_type_kind_code(name) {
+                        stack.push(Slot {
+                            value: Value::Int(kind as i64),
+                            kind: 4,
+                        });
+                        return Ok(());
+                    }
+                    return Err(InterpretError::new(
+                        format!("unknown variable '{name}'"),
+                        span,
+                        "E320",
+                    ));
+                };
                 stack.push(Slot {
                     value: local.value.clone_for_stack(),
                     kind: local.kind,
@@ -2012,7 +2025,9 @@ impl Interpreter {
                 Ok(())
             }
             Expr::TypeValue { name } => {
-                let kind = primitive_kind_code(name).ok_or_else(|| {
+                // Primitives keep their direct kind code; other names resolve
+                // through the interpreter tables (struct, union, enum, error).
+                let kind = self.named_type_kind_code(name).ok_or_else(|| {
                     InterpretError::new(format!("unknown type value '{name}'"), span, "E302")
                 })?;
                 stack.push(Slot {
@@ -4088,26 +4103,30 @@ impl Interpreter {
                 let pk = self.type_kind_code(inner)?;
                 Some(KIND_PTR | (pk << 8))
             }
-            TypeKind::Named(name) => {
-                if let Some(k) = primitive_kind_code(name) {
-                    return Some(k);
-                }
-                if let Some(id) = self.struct_ids.get(name) {
-                    return Some(KIND_STRUCT | ((*id as u64) << 8));
-                }
-                if let Some(id) = self.union_ids.get(name) {
-                    return Some(KIND_UNION | ((*id as u64) << 8));
-                }
-                if self.enum_ids.contains_key(name) {
-                    return Some(4);
-                }
-                if self.error_type_ids.contains_key(name) {
-                    return Some(KIND_ERROR);
-                }
-                None
-            }
+            TypeKind::Named(name) => self.named_type_kind_code(name),
             TypeKind::Union(_) => Some(KIND_ERROR), // fallible binding rare
         }
+    }
+
+    /// Kind code for a name that may be a primitive or a registered named
+    /// type (struct, union, enum, error type).
+    fn named_type_kind_code(&self, name: &str) -> Option<u64> {
+        if let Some(k) = primitive_kind_code(name) {
+            return Some(k);
+        }
+        if let Some(id) = self.struct_ids.get(name) {
+            return Some(KIND_STRUCT | ((*id as u64) << 8));
+        }
+        if let Some(id) = self.union_ids.get(name) {
+            return Some(KIND_UNION | ((*id as u64) << 8));
+        }
+        if self.enum_ids.contains_key(name) {
+            return Some(4);
+        }
+        if self.error_type_ids.contains_key(name) {
+            return Some(KIND_ERROR);
+        }
+        None
     }
 
     fn error_member_tag(&self, ty: &Type) -> Option<u32> {

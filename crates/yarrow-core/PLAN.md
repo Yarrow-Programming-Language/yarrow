@@ -82,10 +82,10 @@ leaks nor double-frees when one side is an owned temporary.
 
 ### 1.4 `typeof` against named types
 
-- [ ] 1.4.1 Extend `Expr::TypeValue` evaluation so a named type resolves
+- [x] 1.4.1 Extend `Expr::TypeValue` evaluation so a named type resolves
   through the interpreter tables: struct ids, union ids, enum ids, and error
   type ids, reusing the logic of `type_kind_code` for `TypeKind::Named`.
-- [ ] 1.4.2 Keep the primitive path unchanged so `myVar typeof i32 ==` keeps
+- [x] 1.4.2 Keep the primitive path unchanged so `myVar typeof i32 ==` keeps
   working.
 
 Acceptance: `{x 1} p const Point` then `p typeof Point ==` pushes `true`; the
