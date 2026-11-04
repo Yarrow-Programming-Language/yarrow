@@ -134,6 +134,16 @@ not mutually.",
 or unreadable. Supply existing paths or in-memory `ProjectRoot` sources.",
     },
     ExplainEntry {
+        code: "E384",
+        title: "duplicate type name across units",
+        body: "\
+Structs, enums, unions, and error types register globally by bare name, so \
+each name may be declared once per program no matter which unit declares it. \
+Rename one of the types, or require the module under an alias so its other \
+exports do not collide. The diagnostic names the unit that declared the \
+type first and the unit that redeclares it.",
+    },
+    ExplainEntry {
         code: "E999",
         title: "internal compiler error (ICE)",
         body: "\

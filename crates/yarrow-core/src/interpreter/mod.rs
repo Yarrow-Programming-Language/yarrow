@@ -322,6 +322,19 @@ pub struct Interpreter {
     /// after the main unit, so an inject that targets a module type (e.g.
     /// `error.Error` from std.error) is resolved in `resolve_error_injects`.
     pending_error_injects: Vec<(u32, String)>,
+    /// Declaring unit per registered type, keyed by category and bare name.
+    /// Backs the `E384` duplicate diagnostic (PLAN 2.2).
+    type_units: HashMap<(TypeCategory, String), String>,
+}
+
+/// Which registry a type name was declared into. Types register globally by
+/// bare name, so a second declaration in the same category is a collision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TypeCategory {
+    Struct,
+    Enum,
+    Union,
+    Error,
 }
 
 /// REPL-oriented wrapper around [`Interpreter`] (Stage 13b surface).
@@ -383,6 +396,7 @@ impl Interpreter {
             error_types: Vec::new(),
             error_tags: HashMap::new(),
             pending_error_injects: Vec::new(),
+            type_units: HashMap::new(),
         }
     }
 
@@ -409,6 +423,7 @@ impl Interpreter {
         self.error_types.clear();
         self.error_tags.clear();
         self.pending_error_injects.clear();
+        self.type_units.clear();
 
         let mut loaded = Vec::new();
         let mut loading = HashSet::new();
@@ -523,12 +538,13 @@ impl Interpreter {
     }
 
     fn register_unit(&mut self, module: Option<String>, program: &Program) -> IResult<()> {
+        let unit = Self::unit_label(module.as_deref());
         for item in &program.items {
             match &item.kind {
-                StmtKind::Struct(d) => self.register_struct(d)?,
-                StmtKind::Enum(d) => self.register_enum(d)?,
-                StmtKind::Union(d) => self.register_union(d)?,
-                StmtKind::Error(d) => self.register_error(d)?,
+                StmtKind::Struct(d) => self.register_struct(&unit, d)?,
+                StmtKind::Enum(d) => self.register_enum(&unit, d)?,
+                StmtKind::Union(d) => self.register_union(&unit, d)?,
+                StmtKind::Error(d) => self.register_error(&unit, d)?,
                 StmtKind::Implement(imp) => self.register_implement(module.clone(), imp)?,
                 StmtKind::Function(f) => {
                     // Every function of a module unit registers under its
@@ -547,10 +563,38 @@ impl Interpreter {
         Ok(())
     }
 
-    fn register_struct(&mut self, d: &StructDecl) -> IResult<()> {
-        if self.struct_ids.contains_key(&d.name) {
-            return Ok(());
+    /// Human-readable name of the unit being registered, for diagnostics.
+    fn unit_label(module: Option<&str>) -> String {
+        match module {
+            Some(path) => format!("module '{path}'"),
+            None => "the main unit".to_string(),
         }
+    }
+
+    /// Reject a second declaration of a type name in the same category
+    /// (PLAN 2.2). Types register globally by bare name, so the later unit
+    /// is always the one blamed; registration order (main unit first, then
+    /// modules in require order) guarantees that.
+    fn check_type_duplicate(
+        &mut self,
+        category: TypeCategory,
+        name: &str,
+        unit: &str,
+    ) -> IResult<()> {
+        if let Some(first) = self.type_units.get(&(category, name.to_string())) {
+            return Err(InterpretError::new(
+                format!("duplicate type '{name}': declared by {first}, redeclared by {unit}"),
+                Span::default(),
+                "E384",
+            ));
+        }
+        self.type_units
+            .insert((category, name.to_string()), unit.to_string());
+        Ok(())
+    }
+
+    fn register_struct(&mut self, unit: &str, d: &StructDecl) -> IResult<()> {
+        self.check_type_duplicate(TypeCategory::Struct, &d.name, unit)?;
         let id = self.structs.len() as u32;
         self.struct_ids.insert(d.name.clone(), id);
         let mut fields = Vec::new();
@@ -648,10 +692,8 @@ impl Interpreter {
         }
     }
 
-    fn register_enum(&mut self, d: &EnumDecl) -> IResult<()> {
-        if self.enum_ids.contains_key(&d.name) {
-            return Ok(());
-        }
+    fn register_enum(&mut self, unit: &str, d: &EnumDecl) -> IResult<()> {
+        self.check_type_duplicate(TypeCategory::Enum, &d.name, unit)?;
         // Carrier story: integer carriers keep discriminants of that width
         // (range-checked below); any other carrier (e.g. `string`) is deferred
         // and rejected here instead of silently behaving as `i32`.
@@ -718,10 +760,8 @@ impl Interpreter {
             })
     }
 
-    fn register_union(&mut self, d: &UnionDecl) -> IResult<()> {
-        if self.union_ids.contains_key(&d.name) {
-            return Ok(());
-        }
+    fn register_union(&mut self, unit: &str, d: &UnionDecl) -> IResult<()> {
+        self.check_type_duplicate(TypeCategory::Union, &d.name, unit)?;
         let id = self.unions.len() as u32;
         self.union_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
@@ -754,10 +794,8 @@ impl Interpreter {
         }
     }
 
-    fn register_error(&mut self, d: &ErrorDecl) -> IResult<()> {
-        if self.error_type_ids.contains_key(&d.name) {
-            return Ok(());
-        }
+    fn register_error(&mut self, unit: &str, d: &ErrorDecl) -> IResult<()> {
+        self.check_type_duplicate(TypeCategory::Error, &d.name, unit)?;
         let id = self.error_types.len() as u32;
         self.error_type_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();

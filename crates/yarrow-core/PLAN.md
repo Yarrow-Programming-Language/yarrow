@@ -141,14 +141,14 @@ second registration of the same name is silently skipped. Two modules that
 each declare a private `Point` with different fields produce a confusing
 `E340` (or a wrong layout) instead of a name-collision diagnostic.
 
-- [ ] 2.2.1 In `register_struct`, `register_enum`, `register_union`, and
+- [x] 2.2.1 In `register_struct`, `register_enum`, `register_union`, and
   `register_error`, replace the silent `contains_key` early return with an
   `E384` diagnostic that names the type, the unit that declared it first,
   and the unit that redeclares it.
-- [ ] 2.2.2 The main unit registers first, then modules in require order
+- [x] 2.2.2 The main unit registers first, then modules in require order
   (the existing order in `load_program`), so the diagnostic always blames the
   later unit.
-- [ ] 2.2.3 Add `E384` to the explain catalog with guidance: rename one of
+- [x] 2.2.3 Add `E384` to the explain catalog with guidance: rename one of
   the types or require the module under an alias.
 
 Decision (recorded, no code): type-level privacy stays as it is. The grammar
