@@ -181,12 +181,12 @@ after block-scoped defers.
 
 ### 2.6 Function-scoped `require`
 
-- [ ] 2.6.1 Make `require` statements inside a function body bind their
+- [x] 2.6.1 Make `require` statements inside a function body bind their
   alias only for that function, per the grammar's "require inside a function
   only affects that function's scope".
-- [ ] 2.6.2 Keep top-level requires global. Load each module once (the
+- [x] 2.6.2 Keep top-level requires global. Load each module once (the
   loader cache already deduplicates by path).
-- [ ] 2.6.3 Store per-function aliases on the function entry or a scope stack
+- [x] 2.6.3 Store per-function aliases on the function entry or a scope stack
   consulted by `resolve_call_name`, instead of only the global `aliases` map.
 
 Acceptance: two functions requiring the same alias for different modules each

@@ -189,6 +189,18 @@ enum Flow {
     Continue,
 }
 
+/// A `require` statement inside a function body: its alias or plain names
+/// bind only for that function (PLAN 2.6).
+#[derive(Debug, Clone)]
+struct LocalRequire {
+    /// Alias scope name, when the require names one.
+    alias: Option<String>,
+    /// Module path (dotted, e.g. "std.io").
+    path: String,
+    /// Single item name for item imports ("std.math.sqrt").
+    item: Option<String>,
+}
+
 /// One registered function body (top-level, nested, method, or from a module).
 #[derive(Debug, Clone)]
 struct FuncEntry {
@@ -198,6 +210,8 @@ struct FuncEntry {
     function: Function,
     /// True when registered from an `implement` block (binds `self`).
     is_method: bool,
+    /// `require` statements of this function body, resolved at registration.
+    local_requires: Vec<LocalRequire>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +268,11 @@ struct Frame {
     pending_error_return: Option<i64>,
     /// Set by `loop.break` / `loop.continue`; consumed by the innermost `for`.
     pending_flow: Option<Flow>,
+    /// Function-scoped `require` bindings (PLAN 2.6): alias → module path,
+    /// alias → item for item imports, bare name → fq for plain imports.
+    local_aliases: HashMap<String, String>,
+    local_item_aliases: HashMap<String, String>,
+    local_plain_funcs: HashMap<String, String>,
 }
 
 /// Stack-machine interpreter over a checked AST.
@@ -267,9 +286,9 @@ pub struct Interpreter {
     plain_funcs: HashMap<String, String>,
     /// Alias → single exported item for item imports under a scope.
     item_aliases: HashMap<String, String>,
-    /// Bare item imports recorded when the parent module was already loaded
-    /// (e.g. `"std.math" math require` then `"std.math.sqrt" require`).
-    extra_plain_items: Vec<(String, String)>,
+    /// Top-level `require` statements in load order (PLAN 2.6): only these
+    /// bind globally; function-body requires bind per function entry.
+    top_requires: Vec<(String, Option<String>)>,
     #[allow(dead_code)]
     public_funcs: std::collections::HashSet<String>,
     modules: Vec<RequiredModule>,
@@ -339,7 +358,7 @@ impl Interpreter {
             aliases: HashMap::new(),
             plain_funcs: HashMap::new(),
             item_aliases: HashMap::new(),
-            extra_plain_items: Vec::new(),
+            top_requires: Vec::new(),
             public_funcs: std::collections::HashSet::new(),
             modules: Vec::new(),
             struct_ids: HashMap::new(),
@@ -365,7 +384,7 @@ impl Interpreter {
         self.aliases.clear();
         self.plain_funcs.clear();
         self.item_aliases.clear();
-        self.extra_plain_items.clear();
+        self.top_requires.clear();
         self.public_funcs.clear();
         self.modules.clear();
         self.struct_ids.clear();
@@ -836,7 +855,7 @@ impl Interpreter {
                 self.public_funcs.insert(fq.clone());
                 self.public_funcs.insert(short.clone());
             }
-            self.register_function_tree(module.clone(), fq, f, true)?;
+            let local_requires = self.register_function_tree(module.clone(), fq, f, true)?;
             // Calls resolve as `Type::method` without a module prefix.
             if module.is_some() {
                 self.funcs.insert(
@@ -846,11 +865,63 @@ impl Interpreter {
                         module: module.clone(),
                         function: f.clone(),
                         is_method: true,
+                        local_requires,
                     },
                 );
             }
         }
         Ok(())
+    }
+
+    /// Collect `(path, alias)` pairs of the `require` statements in a function
+    /// body (PLAN 2.6.1). Nested functions are excluded: they register their
+    /// own entries. Block bodies (if / for / match / defer / handle) belong
+    /// to the function's scope per the grammar.
+    fn body_requires(body: &[Stmt], out: &mut Vec<(String, Option<String>)>) {
+        for s in body {
+            match &s.kind {
+                StmtKind::Require { path, alias } => out.push((path.clone(), alias.clone())),
+                StmtKind::Function(_) => {}
+                StmtKind::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    Self::body_requires(then_branch, out);
+                    Self::body_requires(else_branch, out);
+                }
+                StmtKind::For { body, .. }
+                | StmtKind::Defer { body }
+                | StmtKind::Unsafe { body }
+                | StmtKind::Handle { body, .. } => Self::body_requires(body, out),
+                StmtKind::Match {
+                    cases, else_branch, ..
+                } => {
+                    for c in cases {
+                        Self::body_requires(&c.body, out);
+                    }
+                    Self::body_requires(else_branch, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Resolve the function's `require` statements against the loaded module
+    /// table. Modules are hoisted at load time, so every path here is loaded.
+    fn resolve_local_requires(&mut self, f: &Function) -> IResult<Vec<LocalRequire>> {
+        let mut raw = Vec::new();
+        Self::body_requires(&f.body, &mut raw);
+        let mut local_requires = Vec::new();
+        for (path, alias) in raw {
+            let (module_path, item) = self.resolve_require(&path)?;
+            local_requires.push(LocalRequire {
+                alias,
+                path: module_path,
+                item,
+            });
+        }
+        Ok(local_requires)
     }
 
     fn register_function_tree(
@@ -859,7 +930,7 @@ impl Interpreter {
         fq: String,
         f: &Function,
         is_method: bool,
-    ) -> IResult<()> {
+    ) -> IResult<Vec<LocalRequire>> {
         if matches!(f.visibility, Some(Visibility::Public)) {
             self.public_funcs.insert(fq.clone());
         }
@@ -869,6 +940,7 @@ impl Interpreter {
                 self.register_function_tree(module.clone(), nested, nf, false)?;
             }
         }
+        let local_requires = self.resolve_local_requires(f)?;
         self.funcs.insert(
             fq.clone(),
             FuncEntry {
@@ -876,22 +948,27 @@ impl Interpreter {
                 module,
                 function: f.clone(),
                 is_method,
+                local_requires: local_requires.clone(),
             },
         );
-        Ok(())
+        Ok(local_requires)
     }
 
+    /// Bind top-level requires globally (PLAN 2.6.2). Function-body requires
+    /// are bound per function entry instead (PLAN 2.6.1) and never reach the
+    /// global maps.
     fn register_module_bindings(&mut self) -> IResult<()> {
-        for m in &self.modules {
-            if let Some(alias) = &m.alias {
-                self.aliases.insert(alias.clone(), m.path.clone());
-                if let Some(item) = &m.item {
-                    self.item_aliases.insert(alias.clone(), item.clone());
+        for (path, alias) in self.top_requires.clone() {
+            let (module_path, item) = self.resolve_require(&path)?;
+            if let Some(alias) = alias {
+                self.aliases.insert(alias.clone(), module_path.clone());
+                if let Some(item) = item {
+                    self.item_aliases.insert(alias, item);
                 }
-            } else if let Some(item) = &m.item {
-                let fq = format!("{}::{item}", m.path);
-                self.plain_funcs.insert(item.clone(), fq);
-            } else {
+            } else if let Some(item) = item {
+                let fq = format!("{module_path}::{item}");
+                self.plain_funcs.insert(item, fq);
+            } else if let Some(m) = self.modules.iter().find(|m| m.path == module_path) {
                 for item in &m.program.items {
                     if let StmtKind::Function(f) = &item.kind
                         && matches!(f.visibility, Some(Visibility::Public))
@@ -902,10 +979,6 @@ impl Interpreter {
                 }
             }
         }
-        for (module_path, item) in self.extra_plain_items.clone() {
-            let fq = format!("{module_path}::{item}");
-            self.plain_funcs.insert(item, fq);
-        }
         Ok(())
     }
 
@@ -915,7 +988,7 @@ impl Interpreter {
         out: &mut Vec<RequiredModule>,
         loading: &mut HashSet<String>,
     ) -> IResult<()> {
-        self.load_requires_stmts(&program.items, out, loading)
+        self.load_requires_stmts(&program.items, out, loading, false)
     }
 
     fn load_requires_stmts(
@@ -923,34 +996,44 @@ impl Interpreter {
         stmts: &[Stmt],
         out: &mut Vec<RequiredModule>,
         loading: &mut HashSet<String>,
+        in_function: bool,
     ) -> IResult<()> {
         for s in stmts {
             match &s.kind {
                 StmtKind::Require { path, alias } => {
+                    // Top-level requires bind globally (PLAN 2.6.2);
+                    // function-body requires bind per function entry.
+                    if !in_function {
+                        self.top_requires.push((path.clone(), alias.clone()));
+                    }
                     self.load_one(path, alias, s.span, out, loading)?
                 }
-                StmtKind::Function(f) => self.load_requires_stmts(&f.body, out, loading)?,
+                StmtKind::Function(f) => self.load_requires_stmts(&f.body, out, loading, true)?,
                 StmtKind::If {
                     then_branch,
                     else_branch,
                     ..
                 } => {
-                    self.load_requires_stmts(then_branch, out, loading)?;
-                    self.load_requires_stmts(else_branch, out, loading)?;
+                    self.load_requires_stmts(then_branch, out, loading, in_function)?;
+                    self.load_requires_stmts(else_branch, out, loading, in_function)?;
                 }
-                StmtKind::For { body, .. } => self.load_requires_stmts(body, out, loading)?,
+                StmtKind::For { body, .. } => {
+                    self.load_requires_stmts(body, out, loading, in_function)?
+                }
                 StmtKind::Match {
                     cases, else_branch, ..
                 } => {
                     for c in cases {
-                        self.load_requires_stmts(&c.body, out, loading)?;
+                        self.load_requires_stmts(&c.body, out, loading, in_function)?;
                     }
-                    self.load_requires_stmts(else_branch, out, loading)?;
+                    self.load_requires_stmts(else_branch, out, loading, in_function)?;
                 }
                 StmtKind::Defer { body } | StmtKind::Unsafe { body } => {
-                    self.load_requires_stmts(body, out, loading)?;
+                    self.load_requires_stmts(body, out, loading, in_function)?;
                 }
-                StmtKind::Handle { body, .. } => self.load_requires_stmts(body, out, loading)?,
+                StmtKind::Handle { body, .. } => {
+                    self.load_requires_stmts(body, out, loading, in_function)?
+                }
                 _ => {}
             }
         }
@@ -967,13 +1050,9 @@ impl Interpreter {
     ) -> IResult<()> {
         let (module_path, item) = self.resolve_require(path)?;
         if out.iter().any(|m| m.path == module_path) {
-            // A later bare item import still needs a plain-name binding even
-            // when the module was already loaded under an alias.
-            if alias.is_none()
-                && let Some(item_name) = item
-            {
-                self.extra_plain_items.push((module_path, item_name));
-            }
+            // Already loaded (each module loads once). Alias and plain-name
+            // bindings are registered from the recorded require statements,
+            // so there is nothing more to do here.
             return Ok(());
         }
         if !loading.insert(module_path.clone()) {
@@ -1059,6 +1138,30 @@ impl Interpreter {
             }
         }
         let error_payload = fallible_payload(&entry.function.returns, &self.error_type_ids);
+        // Function-scoped `require` bindings (PLAN 2.6.1): alias and plain
+        // names from this function's own requires shadow the global ones.
+        let mut local_aliases = HashMap::new();
+        let mut local_item_aliases = HashMap::new();
+        let mut local_plain_funcs = HashMap::new();
+        for r in &entry.local_requires {
+            if let Some(alias) = &r.alias {
+                local_aliases.insert(alias.clone(), r.path.clone());
+                if let Some(item) = &r.item {
+                    local_item_aliases.insert(alias.clone(), item.clone());
+                }
+            } else if let Some(item) = &r.item {
+                local_plain_funcs.insert(item.clone(), format!("{}::{item}", r.path));
+            } else if let Some(m) = self.modules.iter().find(|m| m.path == r.path) {
+                for item in &m.program.items {
+                    if let StmtKind::Function(f) = &item.kind
+                        && matches!(f.visibility, Some(Visibility::Public))
+                    {
+                        let fq = format!("{}::{}", r.path, f.name);
+                        local_plain_funcs.insert(f.name.clone(), fq);
+                    }
+                }
+            }
+        }
         let mut frame = Frame {
             locals: HashMap::new(),
             loops: Vec::new(),
@@ -1066,6 +1169,9 @@ impl Interpreter {
             error_payload: error_payload.clone(),
             pending_error_return: None,
             pending_flow: None,
+            local_aliases,
+            local_item_aliases,
+            local_plain_funcs,
         };
         if entry.is_method
             && let Some(recv) = local_stack.first()
@@ -2207,7 +2313,7 @@ impl Interpreter {
             }
             Expr::Member { base, member } => {
                 if let Expr::Variable { name } = base.as_ref()
-                    && self.is_std_loop_alias(name)
+                    && self.is_std_loop_alias(frame, name)
                 {
                     match member.as_str() {
                         "break" | "continue" => {
@@ -2696,25 +2802,39 @@ impl Interpreter {
                         return Ok(fq);
                     }
                 }
+                if let Some(plain) = frame.local_plain_funcs.get(name) {
+                    return Ok(plain.clone());
+                }
                 if let Some(plain) = self.plain_funcs.get(name) {
                     return Ok(plain.clone());
                 }
                 Ok(name.clone())
             }
             Expr::Member { base, member } => {
-                if let Expr::Variable { name } = base.as_ref()
-                    && let Some(path) = self.aliases.get(name)
-                {
-                    if let Some(item) = self.item_aliases.get(name)
-                        && item != member
-                    {
-                        return Err(InterpretError::new(
-                            format!("module '{path}' only exports '{item}' (not '{member}')"),
-                            span,
-                            "E330",
-                        ));
+                if let Expr::Variable { name } = base.as_ref() {
+                    // Function-scoped `require` bindings shadow the global
+                    // ones (PLAN 2.6).
+                    let path = frame
+                        .local_aliases
+                        .get(name)
+                        .or_else(|| self.aliases.get(name));
+                    if let Some(path) = path {
+                        let item = if frame.local_aliases.contains_key(name) {
+                            frame.local_item_aliases.get(name)
+                        } else {
+                            self.item_aliases.get(name)
+                        };
+                        if let Some(item) = item
+                            && item != member
+                        {
+                            return Err(InterpretError::new(
+                                format!("module '{path}' only exports '{item}' (not '{member}')"),
+                                span,
+                                "E330",
+                            ));
+                        }
+                        return Ok(format!("{path}::{member}"));
                     }
-                    return Ok(format!("{path}::{member}"));
                 }
                 // Method call: resolve from the base variable's struct type.
                 if let Expr::Variable { name } = base.as_ref()
@@ -3198,8 +3318,12 @@ impl Interpreter {
         }
     }
 
-    fn is_std_loop_alias(&self, alias: &str) -> bool {
-        self.aliases.get(alias).is_some_and(|p| p == "std.loop")
+    fn is_std_loop_alias(&self, frame: &Frame, alias: &str) -> bool {
+        frame
+            .local_aliases
+            .get(alias)
+            .or_else(|| self.aliases.get(alias))
+            .is_some_and(|p| p == "std.loop")
     }
 
     fn eval_builtin(&mut self, name: &str, stack: &mut Vec<Slot>, span: Span) -> IResult<()> {
