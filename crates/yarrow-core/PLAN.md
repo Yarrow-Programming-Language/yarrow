@@ -98,13 +98,18 @@ silently ignores.
 
 ### 2.1 Enum underlying types
 
-- [ ] 2.1.1 Honor `EnumDecl.underlying` in `register_enum`. Decide the
+Decision: integer carriers (i8, i16, i32, i64, u8, u16, u32, u64) are
+honored with discriminants range-checked against the carrier width; every
+other carrier, including `string`, is deferred and rejected with `E393` at
+registration. The default carrier is `i32` per the grammar.
+
+- [x] 2.1.1 Honor `EnumDecl.underlying` in `register_enum`. Decide the
   runtime story per carrier first: integer carriers keep discriminants of that
   width; `string` carrier needs a representation decision (interned handles
   versus discriminants plus a side table).
-- [ ] 2.1.2 Store the carrier in `StructInfo`-style metadata so `typeof` and
+- [x] 2.1.2 Store the carrier in `StructInfo`-style metadata so `typeof` and
   member access agree on the kind code.
-- [ ] 2.1.3 If a carrier is deferred, reject the declaration with a clear
+- [x] 2.1.3 If a carrier is deferred, reject the declaration with a clear
   `E393` instead of silently treating it as `i32`.
 
 Acceptance: `Color string enum` either behaves as a string-carried enum or

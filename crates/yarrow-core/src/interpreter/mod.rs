@@ -222,6 +222,12 @@ struct UnionInfo {
     members: Vec<MemberTy>,
 }
 
+#[derive(Debug, Clone)]
+struct EnumInfo {
+    /// Runtime kind code of the underlying carrier (default `i32`).
+    carrier: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MemberTy {
     Primitive(u64),
@@ -269,6 +275,8 @@ pub struct Interpreter {
     enum_ids: HashMap<String, u32>,
     /// `(enum_name, member_name)` → ordinal value.
     enum_members: HashMap<(String, String), i64>,
+    /// Enum id → declaration metadata (name, carrier kind).
+    enums: Vec<EnumInfo>,
     union_ids: HashMap<String, u32>,
     unions: Vec<UnionInfo>,
     error_type_ids: HashMap<String, u32>,
@@ -330,6 +338,7 @@ impl Interpreter {
             structs: Vec::new(),
             enum_ids: HashMap::new(),
             enum_members: HashMap::new(),
+            enums: Vec::new(),
             union_ids: HashMap::new(),
             unions: Vec::new(),
             error_type_ids: HashMap::new(),
@@ -354,6 +363,7 @@ impl Interpreter {
         self.structs.clear();
         self.enum_ids.clear();
         self.enum_members.clear();
+        self.enums.clear();
         self.union_ids.clear();
         self.unions.clear();
         self.error_type_ids.clear();
@@ -560,8 +570,15 @@ impl Interpreter {
                     Ok((KIND_STRUCT | ((*id as u64) << 8), 8, 8))
                 } else if let Some(id) = self.union_ids.get(n) {
                     Ok((KIND_UNION | ((*id as u64) << 8), 8, 8))
-                } else if self.enum_ids.contains_key(n) {
-                    Ok((4, 8, 8))
+                } else if let Some(id) = self.enum_ids.get(n) {
+                    let carrier = self.enums.get(*id as usize).map_or(3, |e| e.carrier);
+                    let (size, align) = match carrier {
+                        1 | 6 => (1, 1),
+                        2 | 7 => (2, 2),
+                        3 | 8 => (4, 4),
+                        _ => (8, 8),
+                    };
+                    Ok((carrier, size, align))
                 } else {
                     Err(InterpretError::unsupported(
                         format!("field type '{n}'"),
@@ -594,22 +611,70 @@ impl Interpreter {
         if self.enum_ids.contains_key(&d.name) {
             return Ok(());
         }
+        // Carrier story: integer carriers keep discriminants of that width
+        // (range-checked below); any other carrier (e.g. `string`) is deferred
+        // and rejected here instead of silently behaving as `i32`.
+        let carrier = self.enum_carrier_kind(d)?;
+        let (lo, hi) =
+            int_carrier_range(carrier).expect("enum_carrier_kind only admits integer carriers");
         let id = self.enum_ids.len() as u32;
         self.enum_ids.insert(d.name.clone(), id);
-        let mut next = 0i64;
+        let mut next = 0i128;
         for m in &d.members {
             let v = if let Some(raw) = &m.value {
                 decode_int_literal(raw)
                     .map_err(|msg| InterpretError::new(msg, Span::default(), "E363"))?
-                    as i64
             } else {
                 next
             };
+            if v < lo || v > hi {
+                return Err(InterpretError::new(
+                    format!(
+                        "enum '{}' member '{}' value {v} does not fit its carrier",
+                        d.name, m.name
+                    ),
+                    Span::default(),
+                    "E363",
+                ));
+            }
             next = v + 1;
             self.enum_members
-                .insert((d.name.clone(), m.name.clone()), v);
+                .insert((d.name.clone(), m.name.clone()), v as i64);
         }
+        self.enums.push(EnumInfo { carrier });
         Ok(())
+    }
+
+    /// Kind code of an enum's underlying carrier. `None` means the default
+    /// `i32`. Only integer primitives are supported; anything else (string,
+    /// floats, named types) is rejected with `E393`.
+    fn enum_carrier_kind(&self, d: &EnumDecl) -> IResult<u64> {
+        let carrier = match &d.underlying {
+            None => primitive_to_kind(Primitive::I32),
+            Some(ty) => match &ty.kind {
+                TypeKind::Primitive(p) => primitive_to_kind(*p),
+                TypeKind::Named(n) => primitive_kind_code(n),
+                _ => None,
+            },
+        };
+        carrier
+            .filter(|k| int_carrier_range(*k).is_some())
+            .ok_or_else(|| {
+                let what = match &d.underlying {
+                    Some(ty) => match &ty.kind {
+                        // Primitive variant names lowercase to their source
+                        // names (`String` -> `string`, `F32` -> `f32`).
+                        TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
+                        TypeKind::Named(n) => format!("'{n}'"),
+                        _ => "unsupported".to_string(),
+                    },
+                    None => "'i32'".to_string(),
+                };
+                InterpretError::unsupported(
+                    format!("enum carrier {what} for '{}'", d.name),
+                    Span::default(),
+                )
+            })
     }
 
     fn register_union(&mut self, d: &UnionDecl) -> IResult<()> {
@@ -1993,9 +2058,14 @@ impl Interpreter {
                         return Ok(());
                     }
                     if let Some(v) = self.enum_members.get(&(name.clone(), member.clone())) {
+                        let carrier = self
+                            .enum_ids
+                            .get(name)
+                            .and_then(|id| self.enums.get(*id as usize))
+                            .map_or(4, |e| e.carrier);
                         stack.push(Slot {
                             value: Value::Int(*v),
-                            kind: 4,
+                            kind: carrier,
                         });
                         return Ok(());
                     }
@@ -4120,8 +4190,8 @@ impl Interpreter {
         if let Some(id) = self.union_ids.get(name) {
             return Some(KIND_UNION | ((*id as u64) << 8));
         }
-        if self.enum_ids.contains_key(name) {
-            return Some(4);
+        if let Some(id) = self.enum_ids.get(name) {
+            return Some(self.enums.get(*id as usize).map_or(3, |e| e.carrier));
         }
         if self.error_type_ids.contains_key(name) {
             return Some(KIND_ERROR);
@@ -4261,6 +4331,23 @@ fn int_pow(base: i64, mut exp: u32) -> i64 {
         exp >>= 1;
     }
     result
+}
+
+/// Inclusive value range of an integer carrier kind, or `None` for
+/// non-integer kinds. `u64` discriminants above `i64::MAX` are stored as their
+/// bit pattern; the runtime value representation is `i64`.
+fn int_carrier_range(kind: u64) -> Option<(i128, i128)> {
+    Some(match kind {
+        1 => (-128, 127),
+        2 => (-32768, 32767),
+        3 => (-2147483648, 2147483647),
+        4 => (i64::MIN as i128, i64::MAX as i128),
+        6 => (0, 255),
+        7 => (0, 65535),
+        8 => (0, 4294967295),
+        9 => (0, u64::MAX as i128),
+        _ => return None,
+    })
 }
 
 /// Runtime kind codes aligned with `compiler::types::kind_code` for primitives.
