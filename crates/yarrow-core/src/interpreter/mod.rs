@@ -3442,6 +3442,31 @@ impl Interpreter {
             });
         }
 
+        if matches!(op, Eq | Ne)
+            && matches!(l.value, Value::Str { .. })
+            && matches!(r.value, Value::Str { .. })
+        {
+            let (lh, lo) = match l.value {
+                Value::Str { handle, owned } => (handle, owned),
+                _ => unreachable!(),
+            };
+            let (rh, ro) = match r.value {
+                Value::Str { handle, owned } => (handle, owned),
+                _ => unreachable!(),
+            };
+            let eq = runtime::yarrow_str_cmp(lh, rh) == 0;
+            if lo {
+                free_value(lh, KIND_STRING);
+            }
+            if ro {
+                free_value(rh, KIND_STRING);
+            }
+            return Ok(Slot {
+                value: Value::Bool(if op == Eq { eq } else { !eq }),
+                kind: 0,
+            });
+        }
+
         match (&l.value, &r.value, op) {
             (Value::Float(_), Value::Float(_), _)
             | (Value::Float(_), Value::Int(_), _)

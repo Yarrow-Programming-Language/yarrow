@@ -73,7 +73,7 @@ Acceptance: each intrinsic runs on `list<i32>`, `list<string>`, and
 
 ### 1.3 String equality
 
-- [ ] 1.3.1 Add string cases to `eval_bin` for `Eq` and `Ne`: compare through
+- [x] 1.3.1 Add string cases to `eval_bin` for `Eq` and `Ne`: compare through
   `runtime::yarrow_str_cmp` (or a direct byte compare), free owned operands,
   push a `bool`. Mirror the ownership handling of the existing `Concat` arm.
 
