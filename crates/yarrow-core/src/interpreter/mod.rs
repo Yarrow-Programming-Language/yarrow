@@ -531,10 +531,10 @@ impl Interpreter {
                 StmtKind::Error(d) => self.register_error(d)?,
                 StmtKind::Implement(imp) => self.register_implement(module.clone(), imp)?,
                 StmtKind::Function(f) => {
-                    let keep = module.is_none() || matches!(f.visibility, Some(Visibility::Public));
-                    if !keep {
-                        continue;
-                    }
+                    // Every function of a module unit registers under its
+                    // qualified name so private helpers are callable inside
+                    // their own module (PLAN 2.1.1). The cross-unit gate in
+                    // `eval_call` keeps them file-local.
                     let fq = match &module {
                         Some(path) => format!("{path}::{}", f.name),
                         None => f.name.clone(),
@@ -1110,11 +1110,20 @@ impl Interpreter {
             let parent_prog = parse(tokens).map_err(|_| {
                 InterpretError::new("failed to parse parent module", Span::default(), "E380")
             })?;
-            if parent_prog
-                .items
-                .iter()
-                .any(|i| matches!(&i.kind, StmtKind::Function(f) if f.name == last))
-            {
+            // Item imports are restricted to `public` functions (PLAN 2.1.3):
+            // a private function stays file-local, so requiring it by name
+            // is rejected at load time instead of binding it.
+            if let Some(f) = parent_prog.items.iter().find_map(|i| match &i.kind {
+                StmtKind::Function(f) if f.name == last => Some(f),
+                _ => None,
+            }) {
+                if !matches!(f.visibility, Some(Visibility::Public)) {
+                    return Err(InterpretError::new(
+                        format!("module '{parent}' does not export '{last}': private function"),
+                        Span::default(),
+                        "E330",
+                    ));
+                }
                 return Ok((parent.to_string(), Some(last.to_string())));
             }
         }
@@ -2819,6 +2828,19 @@ impl Interpreter {
         let entry = self.funcs.get(&name).cloned().ok_or_else(|| {
             InterpretError::new(format!("unknown function '{name}'"), span, "E330")
         })?;
+        // Privacy gate (PLAN 2.1.2 / 2.1.4): a function or method is only
+        // reachable from outside its own unit when it is `public`. Same-unit
+        // calls (including private helpers and private methods) pass.
+        if entry.module.as_deref() != module && !self.public_funcs.contains(&entry.fq) {
+            return Err(InterpretError::new(
+                format!(
+                    "function '{}' is private to its unit and not exported",
+                    entry.fq
+                ),
+                span,
+                "E330",
+            ));
+        }
         let n = entry.function.params.len();
         let arg_start = stack.len().saturating_sub(n);
         let mut to_free = Vec::new();

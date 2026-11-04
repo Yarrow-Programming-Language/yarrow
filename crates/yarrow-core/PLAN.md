@@ -114,18 +114,18 @@ with `E330 unknown function`). The spec says private entities "stay
 file-local and are not exported": callable within the file, invisible
 outside it.
 
-- [ ] 2.1.1 Register every function of a module unit in `funcs` under its
+- [x] 2.1.1 Register every function of a module unit in `funcs` under its
   module-qualified name, regardless of visibility.
-- [ ] 2.1.2 Keep the export filters as they are: only `public` functions are
+- [x] 2.1.2 Keep the export filters as they are: only `public` functions are
   bound into alias scopes (`aliases`), plain-name imports (`plain_funcs`),
   and the per-function `local_plain_funcs` tables. A private module function
   must not be reachable as `alias.name call` or `name call` from another
   unit.
-- [ ] 2.1.3 Restrict item imports (`"mod.item" require`) to `public`
+- [x] 2.1.3 Restrict item imports (`"mod.item" require`) to `public`
   functions: `resolve_require` must check the target function's visibility
   in the parent module and reject a private item with a diagnostic instead
   of binding it.
-- [ ] 2.1.4 `register_implement` follows the same rule for methods: private
+- [x] 2.1.4 `register_implement` follows the same rule for methods: private
   methods register and are callable inside their module, but are not
   exported.
 
