@@ -1709,11 +1709,7 @@ impl Interpreter {
                 stmt.span,
             ),
             StmtKind::For { source, body } => {
-                if for_source_is_condition(source) {
-                    self.eval_cond_for(source, body, stack, frame, module, caller_fq, stmt.span)
-                } else {
-                    self.eval_iter_for(source, body, stack, frame, module, caller_fq, stmt.span)
-                }
+                self.eval_for(source, body, stack, frame, module, caller_fq, stmt.span)
             }
             StmtKind::Return { value } => {
                 if let Some(v) = value {
@@ -1969,6 +1965,51 @@ impl Interpreter {
         Ok(flow)
     }
 
+    /// Runtime dispatch for `for`: evaluate the source expression once and
+    /// pick the condition-loop or iterable form from the popped value. A
+    /// bool runs the condition form, which re-evaluates the source before
+    /// every iteration; an array or list runs the iterable form on the
+    /// already-popped value.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_for(
+        &mut self,
+        source: &Expr,
+        body: &[Stmt],
+        stack: &mut Vec<Slot>,
+        frame: &mut Frame,
+        module: Option<&str>,
+        caller_fq: &str,
+        span: Span,
+    ) -> IResult<Flow> {
+        let pre = stack.len();
+        self.eval_expr(source, stack, frame, module, caller_fq, span)?;
+        let first = self.pop(stack, span, "'for' source")?;
+        if frame.pending_flow.take().is_some() {
+            first.drop_owned();
+            return Ok(Flow::Next);
+        }
+        match first.value {
+            Value::Bool(_) => {
+                first.drop_owned();
+                while stack.len() > pre {
+                    stack.pop().unwrap().drop_owned();
+                }
+                self.eval_cond_for(source, body, stack, frame, module, caller_fq, span)
+            }
+            Value::Array(_) | Value::Heap { .. } => {
+                self.eval_iter_for(pre, first, body, stack, frame, module, caller_fq, span)
+            }
+            other => {
+                other.drop_owned();
+                Err(InterpretError::new(
+                    "'for' requires a bool condition or an array or list iterable",
+                    span,
+                    "E394",
+                ))
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn eval_cond_for(
         &mut self,
@@ -2030,7 +2071,8 @@ impl Interpreter {
     #[allow(clippy::too_many_arguments)]
     fn eval_iter_for(
         &mut self,
-        source: &Expr,
+        pre: usize,
+        iterable: Slot,
         body: &[Stmt],
         stack: &mut Vec<Slot>,
         frame: &mut Frame,
@@ -2038,14 +2080,6 @@ impl Interpreter {
         caller_fq: &str,
         span: Span,
     ) -> IResult<Flow> {
-        let pre = stack.len();
-        self.eval_expr(source, stack, frame, module, caller_fq, span)?;
-        let iterable = self.pop(stack, span, "'for' iterable")?;
-        if frame.pending_flow.take().is_some() {
-            iterable.drop_owned();
-            return Ok(Flow::Next);
-        }
-
         match iterable.value {
             Value::Array(elems) => {
                 for (i, elem) in elems.into_iter().enumerate() {
@@ -4721,18 +4755,6 @@ impl Interpreter {
 impl Default for Interpreter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn for_source_is_condition(source: &Expr) -> bool {
-    use BinOp::*;
-    match source {
-        Expr::Bool { .. } => true,
-        Expr::Binary { op, .. } => matches!(op, Eq | Ne | Gt | Gte | Lt | Lte | And | Or),
-        Expr::Unary { .. } | Expr::ApplyUn(_) => true,
-        Expr::ApplyBin(op) => matches!(op, Eq | Ne | Gt | Gte | Lt | Lte | And | Or),
-        Expr::Seq(xs) => xs.last().is_some_and(|(e, _)| for_source_is_condition(e)),
-        _ => false,
     }
 }
 

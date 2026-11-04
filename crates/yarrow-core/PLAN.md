@@ -65,16 +65,16 @@ iterable choice is made syntactically by `for_source_is_condition`, so a
 comparison (`counter 5 < for`) loops but a bool variable (`go for`) or a call
 pushing a bool fails with `E394`.
 
-- [ ] 1.2.1 Replace the syntactic test in `eval_stmt` (`StmtKind::For`) with
+- [x] 1.2.1 Replace the syntactic test in `eval_stmt` (`StmtKind::For`) with
   a runtime dispatch: evaluate the source expression once; if the popped
   value is a `bool`, run the condition-loop form, re-evaluating the source
   expression before every iteration (the source may be a variable that the
   body reassigns, or a call); if it is an array or list, run the iterable
   form on the already-popped value.
-- [ ] 1.2.2 Keep `E394` for sources that are neither bool nor iterable, and
+- [x] 1.2.2 Keep `E394` for sources that are neither bool nor iterable, and
   keep the stack-balance (`E325`) and `loop.break` / `loop.continue`
   behavior identical in both forms.
-- [ ] 1.2.3 Remove `for_source_is_condition` once nothing calls it, so the
+- [x] 1.2.3 Remove `for_source_is_condition` once nothing calls it, so the
   syntactic special case cannot regress.
 
 Acceptance: a loop `go for` over a bool variable that the body sets to
