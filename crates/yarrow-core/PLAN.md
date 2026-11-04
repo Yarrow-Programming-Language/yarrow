@@ -209,11 +209,27 @@ of these are static rules.
 
 ### 3.1 Borrow rules
 
-- [ ] 3.1.1 Reject a second live borrow of the same value (single-borrow
+Decision: the checker abstractly interprets the operand stack (one slot per
+value: owned temporary, copy, live borrow, opaque). Borrows come from the
+`borrow` word, from non-copy variable reads, and from `dup` of an owned or
+borrowed slot (the runtime clones the handle unowned). A borrow ends at
+`pop`, at `typeof`, at consumption by a call, at `match` end, or at scope
+exit; a borrow bound into a `reference<T>` variable stays live until that
+variable is set, moved, or goes out of scope. Calls whose signature is not
+visible (module functions behind `require` aliases, builtins) are assumed to
+consume every live on-stack borrow and push one opaque value, so they never
+produce false positives. Field access pushes an opaque value and creates no
+tracked borrow. Diagnostics reuse the reserved codes E375 (second borrow) and
+E374 (owner dropped while borrowed); both are in the explain catalog.
+
+- [x] 3.1.1 Reject a second live borrow of the same value (single-borrow
   rule). Track borrows from the `borrow` word and from non-copy variable
   reads; a borrow ends at `pop`, at consumption by a call, or at scope exit.
-- [ ] 3.1.2 Reject `drop` / `pop` of an owner while a borrow of its value is
-  live.
+- [x] 3.1.2 Reject `drop` / `pop` of an owner while a borrow of its value is
+  live. `pop` of an owned slot with a live borrow always dangles the
+  reference; `drop` only flags owners whose borrow is held through a
+  `reference<T>` binding, because on-stack borrows are released by the same
+  drop.
 
 ### 3.2 Move rules
 
