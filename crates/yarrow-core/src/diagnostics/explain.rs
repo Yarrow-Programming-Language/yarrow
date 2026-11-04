@@ -77,6 +77,16 @@ Values put into a region become invalid after `region.free`. Finish using \
 borrows of region-attached values before freeing the region.",
     },
     ExplainEntry {
+        code: "E377",
+        title: "static initializer is not a compile-time constant",
+        body: "\
+A `static` binding is a compile-time constant, so its initializer must be \
+known statically: literals and constant expressions over them only. \
+Variable reads, calls, and runtime words (`borrow`, `load`, `store`, \
+`@builtins`, `unwrap`) are not allowed. Use `const` or `mutable` for values \
+computed at runtime.",
+    },
+    ExplainEntry {
         code: "E334",
         title: "integer-only remainder and power",
         body: "\

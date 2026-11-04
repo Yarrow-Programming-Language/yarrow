@@ -263,7 +263,25 @@ diagnostic.
 
 ### 3.4 Static variables
 
-- [ ] 3.4.1 Reject a `static` declaration whose initializer is not a
+Decision: the initializer value is the top of the operand stack after the
+initializer's words run, so the checker simulates the stack instead of
+requiring every word to be constant. Each simulated slot remembers whether
+its value is constant and which word produced it; the initializer is
+constant when the final top slot is. Constant words are literals
+(including array, list, hashmap, and struct literals), constant
+expressions over them (operators, `typeof`, stack shuffles), and enum or
+error-type members (`Color.RED`), which are compile-time discriminants and
+tags. Variable reads, calls, builtins, borrows, loads, stores, and unwraps
+produce non-constant slots; calls and builtins consume the whole
+simulated stack (their arity is not visible to the checker), mirroring the
+conservative `unknown_call` modeling of the borrow machine. This matters
+because the parser attaches pending stack words to the next declaration's
+initializer: in `13_containers.yar` the `ys 30 list.push_last call unwrap`
+line is part of the following static's initializer AST, but the bound value
+is the map literal pushed last. A `static` with no initializer binds the
+runtime stack and is rejected the same way. The diagnostic code is E377.
+
+- [x] 3.4.1 Reject a `static` declaration whose initializer is not a
   compile-time constant (literals and constant expressions only; no variable
   reads, no calls).
 

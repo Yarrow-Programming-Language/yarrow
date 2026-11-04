@@ -27,6 +27,14 @@
 //! - E371: `dup` over an owned heap temporary or a live borrow, both of
 //!   which are non-copy values (borrows of copy values stay copies).
 //!
+//! PLAN 3.4 (static variables) restricts `static` initializers to
+//! compile-time constants:
+//!
+//! - E377: a `static` initializer that reads a variable, calls, or uses a
+//!   runtime word (`borrow`, `load`, `store`, `@builtins`, `unwrap`), or a
+//!   `static` declaration with no initializer at all (it would bind the
+//!   runtime stack).
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -42,8 +50,8 @@ use std::collections::HashMap;
 
 use crate::diagnostics::{Diagnostic, DiagnosticBatch, Span};
 use crate::parser::ast::{
-    BinOp, EnumDecl, ErrorDecl, Expr, Function, MatchCaseKind, Primitive, Program, StackOp, Stmt,
-    StmtKind, StructDecl, Type, TypeKind, UnionDecl,
+    BinOp, EnumDecl, ErrorDecl, Expr, Function, MatchCaseKind, Mutability, Primitive, Program,
+    StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnionDecl,
 };
 
 /// Diagnostic code reserved for the single-borrow rule (PLAN 3.1.1).
@@ -56,6 +64,9 @@ const CODE_USE_AFTER_MOVE: &str = "E373";
 const CODE_MOVE_WHILE_BORROWED: &str = "E374";
 /// Diagnostic code reserved for `dup` on a non-copy type (PLAN 3.3.1).
 const CODE_DUP_NON_COPY: &str = "E371";
+/// Diagnostic code reserved for a non-constant `static` initializer
+/// (PLAN 3.4.1).
+const CODE_STATIC_NON_CONST: &str = "E377";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -620,8 +631,15 @@ impl Checker {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.check_expr(expr, stmt.span),
             StmtKind::VarDecl {
-                name, ty, value, ..
+                name,
+                mutability,
+                ty,
+                value,
             } => {
+                // PLAN 3.4.1: a `static` binding is a compile-time constant.
+                if *mutability == Mutability::Static {
+                    self.check_static_init(name, value.as_ref(), stmt.span);
+                }
                 // A missing initializer binds the current stack top. The
                 // popped borrow stays live when the binding holds it
                 // (`bind_var_info` decides).
@@ -792,6 +810,205 @@ impl Checker {
                 self.unsafe_depth -= 1;
             }
         }
+    }
+
+    /// PLAN 3.4.1: a `static` binding is a compile-time constant, so its
+    /// initializer must be statically known: literals and constant
+    /// expressions only, no variable reads, no calls. A declaration with
+    /// no initializer would bind the runtime stack, which is not statically
+    /// known either.
+    fn check_static_init(&mut self, name: &str, value: Option<&Expr>, span: Span) {
+        let Some(value) = value else {
+            self.emit(
+                Diagnostic::error(
+                    CODE_STATIC_NON_CONST,
+                    format!(
+                        "'{name}' is static: it needs a compile-time constant initializer, \
+                         not a value from the runtime stack"
+                    ),
+                )
+                .with_primary(span, ""),
+            );
+            return;
+        };
+        if let Some(bad) = self.static_init_violation(value, span) {
+            self.emit(
+                Diagnostic::error(
+                    CODE_STATIC_NON_CONST,
+                    format!(
+                        "'{name}' is static: its initializer must be a compile-time constant \
+                         (literals and constant expressions only; no variable reads, no calls)"
+                    ),
+                )
+                .with_primary(bad, ""),
+            );
+        }
+    }
+
+    /// Span of the word that makes a `static` initializer not a
+    /// compile-time constant, or `None` when it is constant. The bound
+    /// value is the top of the operand stack after the initializer's words
+    /// run, so the walk simulates the stack: each slot remembers whether
+    /// its value is constant and which word produced it. Words whose
+    /// results are consumed before the binding (a call whose result a
+    /// later word pops) do not taint the initializer. `fallback` covers
+    /// single-word initializers, which the AST stores without their own
+    /// span.
+    fn static_init_violation(&self, expr: &Expr, fallback: Span) -> Option<Span> {
+        let mut stack: Vec<(bool, Span)> = Vec::new();
+        match expr {
+            Expr::Seq(elems) => {
+                for (e, span) in elems {
+                    self.static_word_effect(e, *span, &mut stack);
+                }
+            }
+            other => self.static_word_effect(other, fallback, &mut stack),
+        }
+        match stack.last() {
+            Some((true, _)) => None,
+            Some((false, span)) => Some(*span),
+            None => Some(fallback),
+        }
+    }
+
+    /// Effect of one initializer word on the simulated stack: push a slot
+    /// for value words, apply the runtime stack effect of postfix words.
+    /// Calls and builtins consume the whole simulated stack (their arity
+    /// is not visible here) and push one non-constant slot, mirroring the
+    /// conservative `unknown_call` modeling of the borrow machine.
+    fn static_word_effect(&self, expr: &Expr, span: Span, stack: &mut Vec<(bool, Span)>) {
+        match expr {
+            Expr::Integer { .. }
+            | Expr::Float { .. }
+            | Expr::String { .. }
+            | Expr::Rune { .. }
+            | Expr::Bool { .. }
+            | Expr::TypeValue { .. }
+            | Expr::EmptyMapOrStruct => stack.push((true, span)),
+            Expr::Array { .. }
+            | Expr::List { .. }
+            | Expr::Map { .. }
+            | Expr::StructLit { .. }
+            | Expr::Binary { .. }
+            | Expr::Unary { .. }
+            | Expr::Unwrap { .. } => {
+                stack.push((self.static_nested_const(expr), span));
+            }
+            Expr::Typeof { inner } => {
+                stack.push((self.static_nested_const(inner), span));
+            }
+            Expr::Variable { .. } | Expr::Borrow { .. } => stack.push((false, span)),
+            Expr::Member { base, .. } => stack.push((self.is_const_member_base(base), span)),
+            Expr::Call { .. } | Expr::Builtin { .. } => {
+                stack.clear();
+                stack.push((false, span));
+            }
+            Expr::Load { .. } => stack.push((false, span)),
+            Expr::Store { .. } => {
+                for _ in 0..2 {
+                    stack.pop();
+                }
+            }
+            Expr::ApplyBin(_) => {
+                let (rc, rs) = stack.pop().unwrap_or((true, span));
+                let (lc, ls) = stack.pop().unwrap_or((true, span));
+                stack.push((lc && rc, if rc { ls } else { rs }));
+            }
+            Expr::ApplyUn(_) | Expr::ApplyTypeof => {
+                let slot = stack.pop().unwrap_or((true, span));
+                stack.push(slot);
+            }
+            Expr::ApplyBorrow | Expr::ApplyLoad => {
+                stack.pop();
+                stack.push((false, span));
+            }
+            Expr::StackOp(op) => self.static_stack_op_effect(*op, stack),
+            Expr::Seq(elems) => {
+                for (e, elem_span) in elems {
+                    self.static_word_effect(e, *elem_span, stack);
+                }
+            }
+        }
+    }
+
+    /// Stack shuffles, mirroring the runtime semantics of `StackOp`.
+    fn static_stack_op_effect(&self, op: StackOp, stack: &mut Vec<(bool, Span)>) {
+        match op {
+            StackOp::Dup => {
+                if let Some(top) = stack.last().cloned() {
+                    stack.push(top);
+                }
+            }
+            StackOp::Swap => {
+                let n = stack.len();
+                if n >= 2 {
+                    stack.swap(n - 1, n - 2);
+                }
+            }
+            StackOp::Rot => {
+                let c = stack.pop();
+                let b = stack.pop();
+                let a = stack.pop();
+                if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                    stack.push(b);
+                    stack.push(c);
+                    stack.push(a);
+                }
+            }
+            StackOp::Unrot => {
+                let c = stack.pop();
+                let b = stack.pop();
+                let a = stack.pop();
+                if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                    stack.push(c);
+                    stack.push(a);
+                    stack.push(b);
+                }
+            }
+            StackOp::Pop => {
+                stack.pop();
+            }
+            StackOp::Drop => stack.clear(),
+        }
+    }
+
+    /// Whether a nested expression inside an initializer word is a
+    /// compile-time constant: literals, constant containers and
+    /// expressions over them, and enum or error-type members
+    /// (`Color.RED`), which are compile-time discriminants and tags.
+    /// Variable reads, calls, borrows, loads, and stores are not.
+    fn static_nested_const(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Integer { .. }
+            | Expr::Float { .. }
+            | Expr::String { .. }
+            | Expr::Rune { .. }
+            | Expr::Bool { .. }
+            | Expr::TypeValue { .. }
+            | Expr::EmptyMapOrStruct => true,
+            Expr::Array(elems) | Expr::List(elems) => {
+                elems.iter().all(|e| self.static_nested_const(e))
+            }
+            Expr::Map(pairs) => pairs
+                .iter()
+                .all(|(k, v)| self.static_nested_const(k) && self.static_nested_const(v)),
+            Expr::StructLit(fields) => fields.iter().all(|(_, v)| self.static_nested_const(v)),
+            Expr::Binary { left, right, .. } => {
+                self.static_nested_const(left) && self.static_nested_const(right)
+            }
+            Expr::Unary { operand, .. } => self.static_nested_const(operand),
+            Expr::Unwrap { inner } => self.static_nested_const(inner),
+            Expr::Typeof { inner } => self.static_nested_const(inner),
+            Expr::Member { base, .. } => self.is_const_member_base(base),
+            _ => false,
+        }
+    }
+
+    /// A member access is a compile-time constant only when its base names
+    /// a registered enum or error type (a discriminant or tag).
+    fn is_const_member_base(&self, base: &Expr) -> bool {
+        matches!(base, Expr::Variable { name }
+            if self.decls.is_enum(name) || self.decls.is_error_type(name))
     }
 
     /// `source target move`: ownership (and a held borrow) transfers to the
