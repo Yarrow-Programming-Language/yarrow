@@ -16,6 +16,12 @@
 //! - E375: a second live borrow of the same value (single-borrow rule).
 //! - E374: `pop` / `drop` of an owner while a borrow of its value is live.
 //!
+//! PLAN 3.2 (move rules) builds on the same machine: `move` empties the
+//! source binding (a `set` or a re-declaration re-owns the name), and
+//!
+//! - E373: use of a variable after `move` transferred its value.
+//! - E374: `move` of a variable whose value has a live borrow.
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -39,6 +45,10 @@ use crate::parser::ast::{
 const CODE_SECOND_BORROW: &str = "E375";
 /// Diagnostic code reserved for dropping an owner while borrowed (PLAN 3.1.2).
 const CODE_OWNER_WHILE_BORROWED: &str = "E374";
+/// Diagnostic code reserved for use after `move` (PLAN 3.2.1).
+const CODE_USE_AFTER_MOVE: &str = "E373";
+/// Diagnostic code reserved for `move` of an owner while borrowed (PLAN 3.2.2).
+const CODE_MOVE_WHILE_BORROWED: &str = "E374";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -144,6 +154,9 @@ struct VarInfo {
     struct_name: Option<String>,
     /// Live borrow held through this `reference<T>` binding.
     holds: Option<BorrowKey>,
+    /// `move` transferred the value away: further use is E373 (PLAN 3.2.1).
+    /// A `set` or a re-declaration re-owns the name and clears the flag.
+    moved: bool,
 }
 
 /// One lexical scope: its variables die (and release held borrows) at exit.
@@ -382,6 +395,26 @@ impl Checker {
         });
     }
 
+    /// End every trace of the borrow of `key`: the live entry, any
+    /// `reference<T>` binding holding it, and on-stack borrow slots.
+    fn end_borrow(&mut self, key: &BorrowKey) {
+        self.live.remove(key);
+        for scope in &mut self.scopes {
+            for var in scope.vars.values_mut() {
+                if var.holds.as_ref() == Some(key) {
+                    var.holds = None;
+                }
+            }
+        }
+        for slot in &mut self.stack {
+            if let Slot::Borrow(held) = slot
+                && held == key
+            {
+                *slot = Slot::Unknown;
+            }
+        }
+    }
+
     /// Leave the innermost scope: its variables die, and every borrow
     /// created inside it ends (PLAN 3.1.1 "a borrow ends at scope exit").
     fn pop_scope(&mut self) {
@@ -458,6 +491,7 @@ impl Checker {
                 is_reference,
                 struct_name,
                 holds: None,
+                moved: false,
             },
             slot,
         );
@@ -525,6 +559,7 @@ impl Checker {
                     is_reference: true,
                     struct_name,
                     holds: None,
+                    moved: false,
                 },
             );
         }
@@ -606,6 +641,8 @@ impl Checker {
                     if let Some(key) = info.holds.take() {
                         self.live.remove(&key);
                     }
+                    // `set` re-owns the name, even after a `move`.
+                    info.moved = false;
                     match (&slot, info.is_reference) {
                         (Slot::Borrow(key), true) => info.holds = Some(key.clone()),
                         (Slot::Borrow(key), false) => {
@@ -751,12 +788,39 @@ impl Checker {
     }
 
     /// `source target move`: ownership (and a held borrow) transfers to the
-    /// target; the target's old value is dropped.
+    /// target; the target's old value is dropped. PLAN 3.2: the source
+    /// binding is emptied (E373 on further use) and must not carry a live
+    /// borrow (E374).
     fn check_move(&mut self, target: &str, source: &Expr, span: Span) {
         if let Expr::Variable { name } = source
-            && let Some(info) = self.lookup_var(name).cloned()
+            && let Some(mut info) = self.lookup_var(name).cloned()
         {
-            // Ownership (and a held borrow) transfers to the target.
+            // PLAN 3.2.1: moving an already-moved source is a use after
+            // move.
+            if info.moved {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_USE_AFTER_MOVE,
+                        format!("'{name}' is used after move: read from '{target}' instead"),
+                    )
+                    .with_primary(span, ""),
+                );
+            }
+            // PLAN 3.2.2: the borrow would outlive the source binding.
+            let key = BorrowKey::Var(name.to_string());
+            if self.is_live(&key) {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_MOVE_WHILE_BORROWED,
+                        "move transfers an owner while a borrow of its value is live: release the borrow first",
+                    )
+                    .with_primary(span, ""),
+                );
+                self.end_borrow(&key);
+            }
+            // Ownership (and a held borrow) transfers to the target; the
+            // target starts out owning its value.
+            info.moved = false;
             self.bind_var_info(target, info, Slot::Unknown);
             if let Some(src) = self
                 .scopes
@@ -765,6 +829,7 @@ impl Checker {
                 .find_map(|s| s.vars.get_mut(name))
             {
                 src.holds = None;
+                src.moved = true;
             }
             return;
         }
@@ -778,6 +843,7 @@ impl Checker {
                 is_reference: false,
                 struct_name: None,
                 holds: None,
+                moved: false,
             },
             slot,
         );
@@ -977,6 +1043,21 @@ impl Checker {
             self.push_slot(Slot::Unknown);
             return;
         };
+        if var.moved {
+            // PLAN 3.2.1: the name was emptied by `move`.
+            let is_copy = var.is_copy;
+            self.emit(
+                Diagnostic::error(
+                    CODE_USE_AFTER_MOVE,
+                    format!("'{name}' is used after move: the value now lives in another variable"),
+                )
+                .with_primary(span, ""),
+            );
+            // The read still happens at runtime; model it without borrow
+            // tracking.
+            self.push_slot(if is_copy { Slot::Copy } else { Slot::Unknown });
+            return;
+        }
         if var.is_reference {
             // Reading a reference lends it; the binding keeps holding the
             // borrow, so this creates no tracked borrow.
@@ -1005,6 +1086,18 @@ impl Checker {
                 self.push_slot(Slot::Copy);
                 return;
             }
+            // PLAN 3.2.1: field access reads the base variable.
+            if self.lookup_var(name).is_some_and(|var| var.moved) {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_USE_AFTER_MOVE,
+                        format!(
+                            "'{name}' is used after move: the value now lives in another variable"
+                        ),
+                    )
+                    .with_primary(span, ""),
+                );
+            }
             // Field access on a local, or a module item: opaque.
             self.push_slot(Slot::Unknown);
             return;
@@ -1016,7 +1109,7 @@ impl Checker {
 
     /// `call`: a known function pops its parameters and pushes its returns;
     /// anything else is an opaque module call.
-    fn check_call(&mut self, target: &Expr, _span: Span) {
+    fn check_call(&mut self, target: &Expr, span: Span) {
         match target {
             Expr::Variable { name } => match self.resolve_function(name) {
                 Some(summary) => {
@@ -1037,17 +1130,29 @@ impl Checker {
                     }
                     // Method on a local struct variable: the receiver is
                     // the first parameter.
-                    if let Some(var) = self.lookup_var(name)
-                        && let Some(struct_name) = &var.struct_name
-                    {
-                        let fq = format!("{struct_name}::{member}");
-                        if let Some(summary) = self.decls.function(&fq) {
-                            let (params, returns) = (summary.param_count, summary.return_count);
-                            self.pop_n(params);
-                            for _ in 0..returns {
-                                self.push_slot(Slot::Unknown);
+                    if let Some(var) = self.lookup_var(name).cloned() {
+                        // PLAN 3.2.1: the call reads the receiver.
+                        if var.moved {
+                            self.emit(
+                                Diagnostic::error(
+                                    CODE_USE_AFTER_MOVE,
+                                    format!(
+                                        "'{name}' is used after move: the value now lives in another variable"
+                                    ),
+                                )
+                                .with_primary(span, ""),
+                            );
+                        }
+                        if let Some(struct_name) = &var.struct_name {
+                            let fq = format!("{struct_name}::{member}");
+                            if let Some(summary) = self.decls.function(&fq) {
+                                let (params, returns) = (summary.param_count, summary.return_count);
+                                self.pop_n(params);
+                                for _ in 0..returns {
+                                    self.push_slot(Slot::Unknown);
+                                }
+                                return;
                             }
-                            return;
                         }
                     }
                 }

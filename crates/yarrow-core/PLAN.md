@@ -233,8 +233,15 @@ E374 (owner dropped while borrowed); both are in the explain catalog.
 
 ### 3.2 Move rules
 
-- [ ] 3.2.1 Reject any use of a variable after `move` transferred its value.
-- [ ] 3.2.2 Reject `move` of a variable that has a live borrow.
+Decision: the checker marks the source binding as moved; a `set` or a
+re-declaration re-owns the name and clears the flag. Use after move (E373)
+covers variable reads, field access, method receivers, `borrow` of the name,
+and a second `move` of it. Moving an owner with a live borrow (E374, reusing
+the owner-while-borrowed code) also ends the borrow in the checker's state so
+one mistake yields one diagnostic, not a cascade.
+
+- [x] 3.2.1 Reject any use of a variable after `move` transferred its value.
+- [x] 3.2.2 Reject `move` of a variable that has a live borrow.
 
 ### 3.3 Copy rules
 
