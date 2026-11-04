@@ -42,11 +42,11 @@ Raw pointers, `mem.allocate` / `free` / `load` / `store`, and calls to \
         title: "dup on a non-copy type",
         body: "\
 `dup` bitwise-duplicates copy types only: integers, floats, bool, rune, \
-enum, `array<T N>`, and `pointer<T>`.
+integer-carried enums, `array<T N>`, and `pointer<T>`.
 
-For `string`, `list<T>`, `hashmap<K V>`, unions, and structs, duplicate \
-access goes through `borrow` (or `move` to transfer ownership) instead of \
-`dup`.",
+For `string`, string-carried enums, `list<T>`, `hashmap<K V>`, unions, and \
+structs, duplicate access goes through `borrow` (or `move` to transfer \
+ownership) instead of `dup`.",
     },
     ExplainEntry {
         code: "E373",
@@ -142,6 +142,18 @@ each name may be declared once per program no matter which unit declares it. \
 Rename one of the types, or require the module under an alias so its other \
 exports do not collide. The diagnostic names the unit that declared the \
 type first and the unit that redeclares it.",
+    },
+    ExplainEntry {
+        code: "E363",
+        title: "invalid literal or enum carrier",
+        body: "\
+Literals must decode into their value: integers within their signed range, \
+valid floats, closed string quotes, and single-rune literals.
+
+An enum carrier must be an integer primitive or `string` \
+(`Color string enum`). A string carrier stores each member's name as its \
+value, so members cannot take explicit values; an integer carrier's \
+explicit member values must fit the carrier's range.",
     },
     ExplainEntry {
         code: "E999",

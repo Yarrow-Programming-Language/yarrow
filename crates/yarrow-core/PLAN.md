@@ -204,22 +204,41 @@ enum values goes through the existing string `==`; `typeof` reports the
 enum's own kind code (3.1). Integer carriers keep discriminants exactly as
 today.
 
-- [ ] 3.2.1 Extend `register_enum` and `enum_carrier_kind` to admit the
+Recorded implementation decisions (3.2):
+
+- Member access pushes an owned clone of the interned member string, not
+  the interned handle itself, so container storage (struct fields, list
+  elements, map values) can free its copy without dangling the interned
+  handle on the next access.
+- The host runtime learns each enum's carrier kind at registration
+  (`yarrow_register_enum_carrier`), so `free_value` and `yarrow_value_clone`
+  free and clone enum-typed fields and elements through the carrier
+  (string handle vs inline scalar bits).
+- The checker models string-enum member access as an owned heap temp, so
+  `dup` on the value is the non-copy `E371`, exactly as for strings.
+  Bindings of enum type keep the checker's existing copy modeling so the
+  grammar tour's match idiom (`dup Color.RED == case`) keeps checking
+  clean; at runtime a `dup` of such a binding pushes an unowned clone,
+  which is safe.
+- Explicit member values on a string carrier are rejected with `E363`
+  (the carrier stores member names; there is nothing to assign).
+
+- [x] 3.2.1 Extend `register_enum` and `enum_carrier_kind` to admit the
   string carrier: intern one heap string per member at registration, store
   the member-to-handle table in the enum's metadata, and keep the
   discriminant table for integer carriers unchanged.
-- [ ] 3.2.2 Member access (`Expr::Member` on an enum type) pushes the
+- [x] 3.2.2 Member access (`Expr::Member` on an enum type) pushes the
   member's string handle for string-carried enums, with the enum's kind code
   from 3.1 on the slot.
-- [ ] 3.2.3 Storage and ownership: a string-carried enum value is a heap
+- [x] 3.2.3 Storage and ownership: a string-carried enum value is a heap
   handle, so struct fields, list elements, and map values of that type store
   the 8-byte handle and free it through the string free path; `dup` on a
   string-carried enum value is rejected by the existing non-copy `dup` rule
   (E371) since the value is a heap string, unlike integer-carried enums
   which stay copy values.
-- [ ] 3.2.4 `match` on a string-carried enum works through string equality
+- [x] 3.2.4 `match` on a string-carried enum works through string equality
   (`dup Color.RED == case`), and `typeof` reports the enum.
-- [ ] 3.2.5 Carriers other than the integer primitives and `string` (floats,
+- [x] 3.2.5 Carriers other than the integer primitives and `string` (floats,
   named types) are rejected at registration with `E363` and a message that
   names the carrier. This is a spec boundary, not a deferral: the spec only
   defines integer and string carriers.

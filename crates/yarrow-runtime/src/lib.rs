@@ -144,6 +144,11 @@ static STRUCT_DESCS: std::sync::LazyLock<Mutex<HashMap<u32, Vec<FieldDesc>>>> =
 static UNION_DESCS: std::sync::LazyLock<Mutex<HashMap<u32, Vec<u64>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Enum id -> registered carrier kind code. A string carrier stores a heap
+/// string handle per value; an integer carrier stores inline scalar bits.
+static ENUM_DESCS: std::sync::LazyLock<Mutex<HashMap<u32, u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
 // ---------------------------------------------------------------------------
 // Heap
 // ---------------------------------------------------------------------------
@@ -613,7 +618,18 @@ pub extern "C" fn free_value(v: u64, kind: u64) {
         KIND_PTR => {}
         KIND_ARRAY => free_array(v),
         KIND_UNION => free_union(v, (kind >> 8) as u32),
+        KIND_ENUM => free_enum(v, (kind >> 8) as u32),
         _ => {}
+    }
+}
+
+/// Free an enum value through its registered carrier: a string carrier
+/// stores a heap string handle; an integer carrier stores inline bits, so
+/// there is nothing to free.
+fn free_enum(v: u64, id: u32) {
+    let carrier = ENUM_DESCS.lock().unwrap().get(&id).copied();
+    if carrier.is_some_and(|k| tag(k) == KIND_STRING) {
+        free_str(v);
     }
 }
 
@@ -642,6 +658,16 @@ pub unsafe extern "C" fn yarrow_register_union_descs(id: u32, ptr: *const u64, c
         descs.push(*ptr.add(i));
     }
     UNION_DESCS.lock().unwrap().insert(id, descs);
+}
+
+/// Register an enum's carrier kind code so `free_value` and
+/// `yarrow_value_clone` can handle enum-typed fields and elements.
+///
+/// # Safety
+///
+/// Nothing to uphold: the carrier is a plain kind code, not a pointer.
+pub unsafe extern "C" fn yarrow_register_enum_carrier(id: u32, carrier: u64) {
+    ENUM_DESCS.lock().unwrap().insert(id, carrier);
 }
 
 // ---------------------------------------------------------------------------
@@ -680,7 +706,20 @@ pub extern "C" fn yarrow_value_clone(v: u64, kind: u64) -> u64 {
         KIND_STRUCT => clone_struct(v, (kind >> 8) as u32),
         KIND_ARRAY => v,
         KIND_UNION => clone_union(v, (kind >> 8) as u32),
+        KIND_ENUM => clone_enum(v, (kind >> 8) as u32),
         _ => v,
+    }
+}
+
+/// Clone an enum value through its registered carrier: a string carrier
+/// clones its heap string; an integer carrier is scalar bits and clones as
+/// itself.
+fn clone_enum(v: u64, id: u32) -> u64 {
+    let carrier = ENUM_DESCS.lock().unwrap().get(&id).copied();
+    if carrier.is_some_and(|k| tag(k) == KIND_STRING) {
+        clone_str(v)
+    } else {
+        v
     }
 }
 
@@ -1504,6 +1543,13 @@ pub static HOST_FNS: std::sync::LazyLock<Vec<HostFn>> = std::sync::LazyLock::new
             params: &[KIND_I64, KIND_I64, KIND_I64],
             returns: &[],
             address: yarrow_register_union_descs as *const () as usize,
+            safety: Safety::Safe,
+        },
+        HostFn {
+            name: "register_enum_carrier",
+            params: &[KIND_I64, KIND_I64],
+            returns: &[],
+            address: yarrow_register_enum_carrier as *const () as usize,
             safety: Safety::Safe,
         },
         HostFn {

@@ -121,6 +121,18 @@ impl Declarations {
         self.enums.contains_key(name)
     }
 
+    /// Whether `name` declares a string-carried enum (PLAN 3.2): its values
+    /// are heap strings at runtime, unlike integer-carried enums.
+    pub fn is_string_enum(&self, name: &str) -> bool {
+        self.enums.get(name).is_some_and(|d| match &d.underlying {
+            Some(ty) => {
+                matches!(&ty.kind, TypeKind::Primitive(Primitive::String))
+                    || matches!(&ty.kind, TypeKind::Named(n) if n == "string")
+            }
+            None => false,
+        })
+    }
+
     pub fn is_union(&self, name: &str) -> bool {
         self.unions.contains_key(name)
     }
@@ -1339,9 +1351,16 @@ impl Checker {
             {
                 return;
             }
-            // Enum members and error tags are copy values.
+            // Enum members and error tags are copy values. PLAN 3.2: a
+            // string-carried enum member is a heap string, so it pushes an
+            // owned temporary; `dup` on it is the non-copy E371.
             if self.is_decl_name(name) {
-                self.push_slot(Slot::Copy);
+                if self.decls.is_string_enum(name) {
+                    let temp = self.fresh_temp();
+                    self.push_slot(Slot::Owned(temp));
+                } else {
+                    self.push_slot(Slot::Copy);
+                }
                 return;
             }
             // PLAN 3.2.1: field access reads the base variable.

@@ -253,6 +253,10 @@ struct EnumInfo {
     name: String,
     /// Runtime kind code of the underlying carrier (default `i32`).
     carrier: u64,
+    /// String-carrier member table: member name -> interned heap string
+    /// handle (PLAN 3.2). `None` for integer carriers, whose discriminants
+    /// live in `enum_members`.
+    strings: Option<Vec<(String, u64)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,6 +421,15 @@ impl Interpreter {
         self.structs.clear();
         self.enum_ids.clear();
         self.enum_members.clear();
+        // PLAN 3.2: the registry owns the interned string-carrier member
+        // strings; release them before dropping the enum table.
+        for e in &self.enums {
+            if let Some(strings) = &e.strings {
+                for (_, handle) in strings {
+                    free_value(*handle, KIND_STRING);
+                }
+            }
+        }
         self.enums.clear();
         self.union_ids.clear();
         self.unions.clear();
@@ -698,45 +711,76 @@ impl Interpreter {
     fn register_enum(&mut self, unit: &str, d: &EnumDecl) -> IResult<()> {
         self.check_type_duplicate(TypeCategory::Enum, &d.name, unit)?;
         // Carrier story: integer carriers keep discriminants of that width
-        // (range-checked below); any other carrier (e.g. `string`) is deferred
-        // and rejected here instead of silently behaving as `i32`.
+        // (range-checked below); a string carrier stores one interned heap
+        // string per member (PLAN 3.2). Any other carrier is rejected with
+        // `E363` by `enum_carrier_kind`.
         let carrier = self.enum_carrier_kind(d)?;
-        let (lo, hi) =
-            int_carrier_range(carrier).expect("enum_carrier_kind only admits integer carriers");
         let id = self.enum_ids.len() as u32;
         self.enum_ids.insert(d.name.clone(), id);
-        let mut next = 0i128;
-        for m in &d.members {
-            let v = if let Some(raw) = &m.value {
-                decode_int_literal(raw)
-                    .map_err(|msg| InterpretError::new(msg, Span::default(), "E363"))?
-            } else {
-                next
-            };
-            if v < lo || v > hi {
-                return Err(InterpretError::new(
-                    format!(
-                        "enum '{}' member '{}' value {v} does not fit its carrier",
-                        d.name, m.name
-                    ),
-                    Span::default(),
-                    "E363",
-                ));
+        if carrier == KIND_STRING {
+            let mut strings = Vec::with_capacity(d.members.len());
+            for m in &d.members {
+                if m.value.is_some() {
+                    return Err(InterpretError::new(
+                        format!(
+                            "enum '{}' member '{}' cannot take an explicit value: \
+                             a string carrier stores member names",
+                            d.name, m.name
+                        ),
+                        Span::default(),
+                        "E363",
+                    ));
+                }
+                let handle = runtime::yarrow_str_new(m.name.as_ptr() as u64, m.name.len() as u64);
+                strings.push((m.name.clone(), handle));
             }
-            next = v + 1;
-            self.enum_members
-                .insert((d.name.clone(), m.name.clone()), v as i64);
+            self.enums.push(EnumInfo {
+                name: d.name.clone(),
+                carrier,
+                strings: Some(strings),
+            });
+        } else {
+            let (lo, hi) = int_carrier_range(carrier)
+                .expect("enum_carrier_kind only admits integer and string carriers");
+            let mut next = 0i128;
+            for m in &d.members {
+                let v = if let Some(raw) = &m.value {
+                    decode_int_literal(raw)
+                        .map_err(|msg| InterpretError::new(msg, Span::default(), "E363"))?
+                } else {
+                    next
+                };
+                if v < lo || v > hi {
+                    return Err(InterpretError::new(
+                        format!(
+                            "enum '{}' member '{}' value {v} does not fit its carrier",
+                            d.name, m.name
+                        ),
+                        Span::default(),
+                        "E363",
+                    ));
+                }
+                next = v + 1;
+                self.enum_members
+                    .insert((d.name.clone(), m.name.clone()), v as i64);
+            }
+            self.enums.push(EnumInfo {
+                name: d.name.clone(),
+                carrier,
+                strings: None,
+            });
         }
-        self.enums.push(EnumInfo {
-            name: d.name.clone(),
-            carrier,
-        });
+        // The host runtime frees and clones enum-typed fields and elements
+        // through the carrier kind (string handles vs inline scalar bits).
+        unsafe {
+            runtime::yarrow_register_enum_carrier(id, carrier);
+        }
         Ok(())
     }
 
     /// Kind code of an enum's underlying carrier. `None` means the default
-    /// `i32`. Only integer primitives are supported; anything else (string,
-    /// floats, named types) is rejected with `E393`.
+    /// `i32`. Integer primitives and `string` are the supported carriers
+    /// (PLAN 3.2); anything else is rejected with `E363`.
     fn enum_carrier_kind(&self, d: &EnumDecl) -> IResult<u64> {
         let carrier = match &d.underlying {
             None => primitive_to_kind(Primitive::I32),
@@ -747,7 +791,7 @@ impl Interpreter {
             },
         };
         carrier
-            .filter(|k| int_carrier_range(*k).is_some())
+            .filter(|k| int_carrier_range(*k).is_some() || *k == KIND_STRING)
             .ok_or_else(|| {
                 let what = match &d.underlying {
                     Some(ty) => match &ty.kind {
@@ -759,9 +803,14 @@ impl Interpreter {
                     },
                     None => "'i32'".to_string(),
                 };
-                InterpretError::unsupported(
-                    format!("enum carrier {what} for '{}'", d.name),
+                InterpretError::new(
+                    format!(
+                        "enum carrier {what} for '{}': only integer carriers \
+                         and string are supported",
+                        d.name
+                    ),
                     Span::default(),
+                    "E363",
                 )
             })
     }
@@ -2233,6 +2282,14 @@ impl Interpreter {
                                 handle: bits,
                                 owned: false,
                             },
+                            // PLAN 3.2: a string-carried enum element is a
+                            // heap string handle.
+                            t if t == KIND_ENUM && self.enum_carrier(elem_kind) == KIND_STRING => {
+                                Value::Str {
+                                    handle: bits,
+                                    owned: false,
+                                }
+                            }
                             _ => Value::Int(bits as i64),
                         },
                     };
@@ -2543,6 +2600,34 @@ impl Interpreter {
                         stack.push(Slot {
                             value: Value::Int(*v),
                             kind,
+                        });
+                        return Ok(());
+                    }
+                    // PLAN 3.2: a string-carried enum member pushes an owned
+                    // clone of its interned member-name string, with the
+                    // enum's own kind code on the slot.
+                    if let Some(id) = self.enum_ids.get(name).copied()
+                        && let Some(strings) =
+                            self.enums.get(id as usize).and_then(|e| e.strings.as_ref())
+                    {
+                        let interned = strings
+                            .iter()
+                            .find(|(n, _)| n == member)
+                            .map(|(_, h)| *h)
+                            .ok_or_else(|| {
+                            InterpretError::new(
+                                format!("unknown enum member '{name}.{member}'"),
+                                span,
+                                "E320",
+                            )
+                        })?;
+                        let handle = runtime::yarrow_value_clone(interned, KIND_STRING);
+                        stack.push(Slot {
+                            value: Value::Str {
+                                handle,
+                                owned: true,
+                            },
+                            kind: KIND_ENUM | ((id as u64) << 8),
                         });
                         return Ok(());
                     }
@@ -3394,6 +3479,14 @@ impl Interpreter {
                             handle: bits,
                             owned: false,
                         },
+                        // PLAN 3.2: a string-carried enum value is a heap
+                        // string handle.
+                        t if t == KIND_ENUM && self.enum_carrier(val_kind) == KIND_STRING => {
+                            Value::Str {
+                                handle: bits,
+                                owned: false,
+                            }
+                        }
                         _ => Value::Int(bits as i64),
                     },
                 });
@@ -4812,9 +4905,21 @@ impl Interpreter {
                     }
                 } else if let Some(id) = self.enum_ids.get(n) {
                     // PLAN 3.1: an enum payload reads back as the enum type.
-                    Slot {
-                        value: Value::Int(bits as i64),
-                        kind: KIND_ENUM | ((*id as u64) << 8),
+                    // PLAN 3.2: a string carrier reads back as its heap
+                    // string handle.
+                    if self.enums.get(*id as usize).map_or(3, |e| e.carrier) == KIND_STRING {
+                        Slot {
+                            value: Value::Str {
+                                handle: bits,
+                                owned,
+                            },
+                            kind: KIND_ENUM | ((*id as u64) << 8),
+                        }
+                    } else {
+                        Slot {
+                            value: Value::Int(bits as i64),
+                            kind: KIND_ENUM | ((*id as u64) << 8),
+                        }
                     }
                 } else {
                     Slot {
@@ -4824,6 +4929,14 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    /// Carrier kind code of an enum slot / field / element kind, defaulting
+    /// to `i32` for unregistered ids.
+    fn enum_carrier(&self, kind: u64) -> u64 {
+        self.enums
+            .get((kind >> 8) as usize)
+            .map_or(3, |e| e.carrier)
     }
 
     fn bits_to_slot_kind(&self, bits: u64, kind: u64, owned: bool) -> Slot {
@@ -4849,6 +4962,15 @@ impl Interpreter {
             },
             12..=15 => Slot {
                 value: Value::Float(f64::from_bits(bits)),
+                kind,
+            },
+            // PLAN 3.2: a string-carried enum reads back as its heap string
+            // handle; integer carriers stay inline bits.
+            t if t == KIND_ENUM && self.enum_carrier(kind) == KIND_STRING => Slot {
+                value: Value::Str {
+                    handle: bits,
+                    owned,
+                },
                 kind,
             },
             _ => Slot {
