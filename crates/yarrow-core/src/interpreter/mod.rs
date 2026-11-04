@@ -184,6 +184,8 @@ type IResult<T> = Result<T, InterpretError>;
 enum Flow {
     Next,
     Return,
+    Break,
+    Continue,
 }
 
 /// One registered function body (top-level, nested, method, or from a module).
@@ -241,6 +243,8 @@ struct Frame {
     error_payload: Option<MemberTy>,
     /// Set by `unwrap` when propagating an error out of a fallible function.
     pending_error_return: Option<i64>,
+    /// Set by `loop.break` / `loop.continue`; consumed by the innermost `for`.
+    pending_flow: Option<Flow>,
 }
 
 /// Stack-machine interpreter over a checked AST.
@@ -889,6 +893,7 @@ impl Interpreter {
             deferred: Vec::new(),
             error_payload: error_payload.clone(),
             pending_error_return: None,
+            pending_flow: None,
         };
         if entry.is_method
             && let Some(recv) = local_stack.first()
@@ -1070,9 +1075,14 @@ impl Interpreter {
         caller_fq: &str,
     ) -> IResult<Flow> {
         for stmt in body {
-            match self.eval_stmt(stmt, stack, frame, module, caller_fq)? {
+            let flow = self.eval_stmt(stmt, stack, frame, module, caller_fq)?;
+            match flow {
                 Flow::Return => return Ok(Flow::Return),
+                Flow::Break | Flow::Continue => return Ok(flow),
                 Flow::Next => {
+                    if let Some(sig) = frame.pending_flow.take() {
+                        return Ok(sig);
+                    }
                     if let Some(tag) = frame.pending_error_return.take() {
                         while let Some(v) = stack.pop() {
                             v.drop_owned();
@@ -1552,6 +1562,11 @@ impl Interpreter {
             while stack.len() > pre {
                 stack.pop().unwrap().drop_owned();
             }
+            match frame.pending_flow.take() {
+                Some(Flow::Break) => break,
+                Some(_) => continue,
+                None => {}
+            }
             if !cond {
                 break;
             }
@@ -1561,8 +1576,16 @@ impl Interpreter {
             });
             let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
             frame.loops.pop();
-            if flow == Flow::Return {
-                return Ok(Flow::Return);
+            match flow {
+                Flow::Return => return Ok(Flow::Return),
+                Flow::Break => {
+                    while stack.len() > pre {
+                        stack.pop().unwrap().drop_owned();
+                    }
+                    break;
+                }
+                Flow::Continue => continue,
+                Flow::Next => {}
             }
             if stack.len() != pre {
                 return Err(InterpretError::new(
@@ -1589,6 +1612,10 @@ impl Interpreter {
         let pre = stack.len();
         self.eval_expr(source, stack, frame, module, caller_fq, span)?;
         let iterable = self.pop(stack, span, "'for' iterable")?;
+        if frame.pending_flow.take().is_some() {
+            iterable.drop_owned();
+            return Ok(Flow::Next);
+        }
 
         match iterable.value {
             Value::Array(elems) => {
@@ -1610,8 +1637,16 @@ impl Interpreter {
                     {
                         v.drop_owned();
                     }
-                    if flow == Flow::Return {
-                        return Ok(Flow::Return);
+                    match flow {
+                        Flow::Return => return Ok(Flow::Return),
+                        Flow::Break => {
+                            while stack.len() > pre {
+                                stack.pop().unwrap().drop_owned();
+                            }
+                            break;
+                        }
+                        Flow::Continue => continue,
+                        Flow::Next => {}
                     }
                     if stack.len() != pre {
                         return Err(InterpretError::new(
@@ -1662,11 +1697,21 @@ impl Interpreter {
                     {
                         v.drop_owned();
                     }
-                    if flow == Flow::Return {
-                        if owned {
-                            free_value(handle, KIND_LIST);
+                    match flow {
+                        Flow::Return => {
+                            if owned {
+                                free_value(handle, KIND_LIST);
+                            }
+                            return Ok(Flow::Return);
                         }
-                        return Ok(Flow::Return);
+                        Flow::Break => {
+                            while stack.len() > pre {
+                                stack.pop().unwrap().drop_owned();
+                            }
+                            break;
+                        }
+                        Flow::Continue => continue,
+                        Flow::Next => {}
                     }
                     if stack.len() != pre {
                         if owned {
@@ -1835,11 +1880,30 @@ impl Interpreter {
                 if let Expr::Variable { name } = base.as_ref()
                     && self.is_std_loop_alias(name)
                 {
-                    let loop_ctx = frame.loops.last().ok_or_else(|| {
-                        InterpretError::new("loop.value / loop.index outside a for", span, "E393")
-                    })?;
                     match member.as_str() {
+                        "break" | "continue" => {
+                            if frame.loops.is_empty() {
+                                return Err(InterpretError::new(
+                                    "loop.break / loop.continue outside a for",
+                                    span,
+                                    "E393",
+                                ));
+                            }
+                            frame.pending_flow = Some(if member == "break" {
+                                Flow::Break
+                            } else {
+                                Flow::Continue
+                            });
+                            return Ok(());
+                        }
                         "value" => {
+                            let loop_ctx = frame.loops.last().ok_or_else(|| {
+                                InterpretError::new(
+                                    "loop.value / loop.index outside a for",
+                                    span,
+                                    "E393",
+                                )
+                            })?;
                             let slot = loop_ctx.value.as_ref().ok_or_else(|| {
                                 InterpretError::new(
                                     "loop.value is not available in this for",
@@ -1854,6 +1918,13 @@ impl Interpreter {
                             return Ok(());
                         }
                         "index" => {
+                            let loop_ctx = frame.loops.last().ok_or_else(|| {
+                                InterpretError::new(
+                                    "loop.value / loop.index outside a for",
+                                    span,
+                                    "E393",
+                                )
+                            })?;
                             let idx = loop_ctx.index.ok_or_else(|| {
                                 InterpretError::new(
                                     "loop.index is not available in this for",
@@ -3392,6 +3463,9 @@ impl Interpreter {
             && i >= pre
         {
             stack.remove(i).drop_owned();
+        }
+        if matches!(flow, Flow::Break | Flow::Continue) {
+            return Ok(flow);
         }
         if let Some(fb) = fallback {
             self.eval_expr(fb, stack, frame, module, caller_fq, span)?;
