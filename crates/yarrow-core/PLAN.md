@@ -324,11 +324,11 @@ compiler error.
 
 ### 4.2 Stale interpreter documentation
 
-- [ ] 4.2.1 Update the module doc of `src/interpreter/mod.rs`: remove the
+- [x] 4.2.1 Update the module doc of `src/interpreter/mod.rs`: remove the
   claim that `00_grammar_tour.yar` is interpret-out-of-scope (it runs cleanly
   now) and refresh the corpus list, which names 15 of the 24 current valid
   examples.
-- [ ] 4.2.2 Re-check this list whenever an example is added or a gap is
+- [x] 4.2.2 Re-check this list whenever an example is added or a gap is
   closed.
 
 ### 4.3 Embedded std modules are unused

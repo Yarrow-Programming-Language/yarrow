@@ -5,9 +5,10 @@
 //! unions, regions, and raw memory. A stack bytecode VM can replace this later
 //! without changing the Session surface (`interpret_source` / [`EvalContext`]).
 //!
-//! ## Corpus coverage (Stage 37)
+//! ## Corpus coverage
 //!
 //! Interprets cleanly (stdout matches JIT `run --target jit`):
+//! - `docs/examples/valid/00_grammar_tour.yar`
 //! - `docs/examples/valid/01_hello.yar`
 //! - `docs/examples/valid/02_arithmetic_and_stack.yar`
 //! - `docs/examples/valid/03_variables_and_typeof.yar`
@@ -23,14 +24,24 @@
 //! - `docs/examples/valid/13_containers.yar`
 //! - `docs/examples/valid/14_io_and_string.yar`
 //! - `docs/examples/valid/15_fs.yar`
+//! - `docs/examples/valid/16_list_iteration.yar`
+//! - `docs/examples/valid/17_empty_placeholders.yar`
+//! - `docs/examples/valid/18_complex_map_keys.yar`
+//! - `docs/examples/valid/19_array_in_list.yar`
+//! - `docs/examples/valid/20_warning_unused.yar`
+//! - `docs/examples/valid/21_warning_never_written.yar`
+//! - `docs/examples/valid/22_warning_unreachable.yar`
+//! - `docs/examples/valid/23_warning_require_ambiguous.yar`
+//! - `docs/examples/valid/24_warning_empty_match.yar`
+//! - `docs/examples/valid/25_warning_empty_if_unsafe.yar`
 //!
 //! Supported surface: Stage 36 plus `unsafe` blocks, `pointer<T>` load/store
 //! and field access/`set`, `std.mem` (`@alloc`/`@free`), `move`, runes, and
 //! `std.fs` host helpers.
 //!
-//! Interpret-out-of-scope: `docs/examples/valid/00_grammar_tour.yar` (tour
-//! mixes many surface forms; remaining gaps stay clear `E393` rather than
-//! inventing ops).
+//! Maintenance: re-check this list whenever an example is added to
+//! `docs/examples/valid/` or a spec gap is closed; every file in that
+//! directory must appear here and run cleanly.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
