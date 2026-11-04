@@ -166,12 +166,12 @@ Acceptance: `3.14 typeof f16 ==` pushes `true`; `1.5 typeof f16 ==` pushes
 
 ### 2.5 `defer` at block scope exit
 
-- [ ] 2.5.1 Run deferred bodies at the exit of the innermost scope that
+- [x] 2.5.1 Run deferred bodies at the exit of the innermost scope that
   registered them: function body, and `if` / `else` / `for` / `match` case /
   `handle` bodies, in reverse registration order.
-- [ ] 2.5.2 Move the deferred registry from `Frame` (function-wide) to a
+- [x] 2.5.2 Move the deferred registry from `Frame` (function-wide) to a
   per-scope stack, or track a scope depth alongside each registered body.
-- [ ] 2.5.3 Preserve the current function-exit behavior for defers
+- [x] 2.5.3 Preserve the current function-exit behavior for defers
   registered directly in the function body, including the fallible-return
   path in `call_function` and the `run_deferred` ordering.
 

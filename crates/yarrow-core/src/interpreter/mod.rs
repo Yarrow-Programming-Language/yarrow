@@ -244,8 +244,10 @@ struct LoopCtx {
 struct Frame {
     locals: HashMap<String, Slot>,
     loops: Vec<LoopCtx>,
-    /// `defer` bodies, run in reverse registration order at function scope exit.
-    deferred: Vec<Vec<Stmt>>,
+    /// `defer` bodies, one entry per active scope (innermost last). Each
+    /// scope runs its registered bodies in reverse order at its exit; the
+    /// function body is the outermost scope.
+    deferred: Vec<Vec<Vec<Stmt>>>,
     /// Payload type of this frame's fallible `|T Err|` return, when present.
     error_payload: Option<MemberTy>,
     /// Set by `unwrap` when propagating an error out of a fallible function.
@@ -1060,7 +1062,7 @@ impl Interpreter {
         let mut frame = Frame {
             locals: HashMap::new(),
             loops: Vec::new(),
-            deferred: Vec::new(),
+            deferred: vec![Vec::new()],
             error_payload: error_payload.clone(),
             pending_error_return: None,
             pending_flow: None,
@@ -1311,6 +1313,9 @@ impl Interpreter {
     }
 
     /// Function-scope exit: run deferred bodies in reverse registration order.
+    /// Nested scopes already ran their defers at their own exit, so normally
+    /// only the function-body scope remains; any leftover scopes run
+    /// innermost first.
     fn run_deferred(
         &mut self,
         stack: &mut Vec<Slot>,
@@ -1318,11 +1323,41 @@ impl Interpreter {
         module: Option<&str>,
         caller_fq: &str,
     ) -> IResult<()> {
-        while let Some(body) = frame.deferred.pop() {
+        while let Some(scope) = frame.deferred.pop() {
+            for body in scope.into_iter().rev() {
+                let flow = self.eval_body(&body, stack, frame, module, caller_fq)?;
+                if flow == Flow::Return {
+                    // Nested return from a defer is ignored for stack shaping; the
+                    // outer function already committed its return values.
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Enter a nested defer scope: `if` / `else` / `for` / `match` case /
+    /// `handle` bodies register defers separately from the function body.
+    fn defer_enter_scope(frame: &mut Frame) {
+        frame.deferred.push(Vec::new());
+    }
+
+    /// Exit the innermost defer scope, running its bodies in reverse
+    /// registration order. A `return` from a defer body stops the remaining
+    /// defers of the scope, matching `run_deferred`.
+    fn defer_exit_scope(
+        &mut self,
+        stack: &mut Vec<Slot>,
+        frame: &mut Frame,
+        module: Option<&str>,
+        caller_fq: &str,
+    ) -> IResult<()> {
+        let Some(scope) = frame.deferred.pop() else {
+            return Ok(());
+        };
+        for body in scope.into_iter().rev() {
             let flow = self.eval_body(&body, stack, frame, module, caller_fq)?;
             if flow == Flow::Return {
-                // Nested return from a defer is ignored for stack shaping; the
-                // outer function already committed its return values.
                 break;
             }
         }
@@ -1537,7 +1572,10 @@ impl Interpreter {
                     stack.pop().unwrap().drop_owned();
                 }
                 let branch = if cond { then_branch } else { else_branch };
-                self.eval_body(branch, stack, frame, module, caller_fq)
+                Self::defer_enter_scope(frame);
+                let flow = self.eval_body(branch, stack, frame, module, caller_fq)?;
+                self.defer_exit_scope(stack, frame, module, caller_fq)?;
+                Ok(flow)
             }
             StmtKind::Match {
                 value,
@@ -1576,7 +1614,9 @@ impl Interpreter {
                 stmt.span,
             ),
             StmtKind::Defer { body } => {
-                frame.deferred.push(body.clone());
+                if let Some(scope) = frame.deferred.last_mut() {
+                    scope.push(body.clone());
+                }
                 Ok(Flow::Next)
             }
             StmtKind::Unsafe { body } => {
@@ -1663,7 +1703,9 @@ impl Interpreter {
                         while stack.len() > sub_len {
                             stack.pop().unwrap().drop_owned();
                         }
+                        Self::defer_enter_scope(frame);
                         let flow = self.eval_body(&case.body, stack, frame, module, caller_fq)?;
+                        self.defer_exit_scope(stack, frame, module, caller_fq)?;
                         let extras: Vec<Slot> = stack.split_off(sub_len);
                         while stack.len() > pre {
                             stack.pop().unwrap().drop_owned();
@@ -1687,8 +1729,10 @@ impl Interpreter {
                             while stack.len() > sub_len {
                                 stack.pop().unwrap().drop_owned();
                             }
+                            Self::defer_enter_scope(frame);
                             let flow =
                                 self.eval_body(&case.body, stack, frame, module, caller_fq)?;
+                            self.defer_exit_scope(stack, frame, module, caller_fq)?;
                             let extras: Vec<Slot> = stack.split_off(sub_len);
                             while stack.len() > pre {
                                 stack.pop().unwrap().drop_owned();
@@ -1753,7 +1797,9 @@ impl Interpreter {
                     // Push payload as a borrowed reference (auto-deref on use).
                     let payload = self.bits_to_slot(payload_bits, &want, false);
                     stack.push(payload);
+                    Self::defer_enter_scope(frame);
                     let flow = self.eval_body(&case.body, stack, frame, module, caller_fq)?;
+                    self.defer_exit_scope(stack, frame, module, caller_fq)?;
                     // Drop unconsumed borrow of the payload.
                     if stack.len() > sub_len
                         && matches!(
@@ -1795,7 +1841,9 @@ impl Interpreter {
         while stack.len() > sub_len {
             stack.pop().unwrap().drop_owned();
         }
+        Self::defer_enter_scope(frame);
         let flow = self.eval_body(else_branch, stack, frame, module, caller_fq)?;
+        self.defer_exit_scope(stack, frame, module, caller_fq)?;
         let extras: Vec<Slot> = stack.split_off(sub_len);
         while stack.len() > pre {
             stack.pop().unwrap().drop_owned();
@@ -1836,7 +1884,9 @@ impl Interpreter {
                 value: None,
                 index: None,
             });
+            Self::defer_enter_scope(frame);
             let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+            self.defer_exit_scope(stack, frame, module, caller_fq)?;
             frame.loops.pop();
             match flow {
                 Flow::Return => return Ok(Flow::Return),
@@ -1893,7 +1943,9 @@ impl Interpreter {
                         value: Some(elem_slot),
                         index: Some(i as i64),
                     });
+                    Self::defer_enter_scope(frame);
                     let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+                    self.defer_exit_scope(stack, frame, module, caller_fq)?;
                     if let Some(ctx) = frame.loops.pop()
                         && let Some(v) = ctx.value
                     {
@@ -1953,7 +2005,9 @@ impl Interpreter {
                         value: Some(elem_slot),
                         index: Some(i as i64),
                     });
+                    Self::defer_enter_scope(frame);
                     let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+                    self.defer_exit_scope(stack, frame, module, caller_fq)?;
                     if let Some(ctx) = frame.loops.pop()
                         && let Some(v) = ctx.value
                     {
@@ -4048,7 +4102,9 @@ impl Interpreter {
             kind: KIND_ERROR,
         });
         let err_idx = stack.len() - 1;
+        Self::defer_enter_scope(frame);
         let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+        self.defer_exit_scope(stack, frame, module, caller_fq)?;
         if flow == Flow::Return {
             return Ok(Flow::Return);
         }
