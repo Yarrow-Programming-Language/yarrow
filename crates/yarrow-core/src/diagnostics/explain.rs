@@ -184,6 +184,16 @@ error type (for example `\"std.error\" error require`) or declare the error \
 type in this unit.",
     },
     ExplainEntry {
+        code: "E396",
+        title: "incompatible stacks at an if/else join",
+        body: "\
+Then and else branches must leave compatible stacks at the join: the same \
+number of values above the pre-`if` height. An `if` without `else` has an \
+implicit else path that pushes nothing, so its then-branch must leave the \
+pre-`if` height. Drop or push values so both branches end at the same \
+height, or add an `else` branch that matches the then-branch.",
+    },
+    ExplainEntry {
         code: "E397",
         title: "private struct field accessed from another unit",
         body: "\

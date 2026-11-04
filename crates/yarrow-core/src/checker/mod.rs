@@ -101,6 +101,9 @@ const CODE_UNWRAP_NON_FALLIBLE: &str = "E379";
 /// Diagnostic code reserved for a union whose member types contain a
 /// duplicate (PLAN 5.3.1).
 const CODE_UNION_DUPLICATE_MEMBER: &str = "E385";
+/// Diagnostic code reserved for an `if` whose branches leave incompatible
+/// stacks at the join (PLAN 5.5).
+const CODE_IF_JOIN_MISMATCH: &str = "E396";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -267,6 +270,11 @@ pub struct Checker {
     /// PLAN 5.2.1: whether the function being checked declares a fallible
     /// return (Stage 4 predicate). Top level is never fallible.
     caller_fallible: bool,
+    /// PLAN 5.5: set while walking a region whose net stack effect the
+    /// checker cannot know (an opaque call or builtin pushes one slot
+    /// without popping its operands). Branch heights computed inside such
+    /// a region are not comparable at an if/else join.
+    height_opaque: bool,
 }
 
 impl Checker {
@@ -286,6 +294,7 @@ impl Checker {
             aliases: HashMap::new(),
             caller_fq: String::new(),
             caller_fallible: false,
+            height_opaque: false,
         }
     }
 
@@ -463,6 +472,10 @@ impl Checker {
     /// assume every live on-stack borrow was consumed (PLAN 3.1.1
     /// "consumption by a call") and push one opaque result.
     fn unknown_call(&mut self) {
+        // PLAN 5.5: the call's arity is invisible here (one slot pushed,
+        // operands not popped), so any enclosing branch height that
+        // includes this effect is not comparable at a join.
+        self.height_opaque = true;
         self.live.clear();
         for slot in &mut self.stack {
             if matches!(slot, Slot::Borrow(_)) {
@@ -628,6 +641,9 @@ impl Checker {
     /// unsafe context, and the borrow machine starts fresh.
     fn check_function(&mut self, f: &Function, fq: &str, is_method: bool) {
         let saved = self.save_machine();
+        // PLAN 5.5: height comparability is per function body; opaque
+        // calls in an earlier function do not blur this one's branches.
+        self.height_opaque = false;
         self.caller_fq = fq.to_string();
         // PLAN 5.2.1: fallibility of the function being checked, via the
         // Stage 4 predicate (the same call also emits E386, PLAN 4.2).
@@ -903,25 +919,72 @@ impl Checker {
                 let base = self.stack.len();
                 let saved = self.stack.clone();
                 let saved_live = self.live.clone();
+                let saved_opaque = self.height_opaque;
 
+                self.height_opaque = false;
                 self.push_scope();
                 self.check_body(then_branch);
                 self.pop_scope();
                 let then_tail = self.split_tail(base);
+                let then_opaque = self.height_opaque;
                 self.stack = saved.clone();
 
-                let else_tail = if else_branch.is_empty() {
-                    Vec::new()
+                let (else_tail, else_opaque) = if else_branch.is_empty() {
+                    (Vec::new(), false)
                 } else {
+                    self.height_opaque = false;
                     self.live = saved_live.clone();
                     self.push_scope();
                     self.check_body(else_branch);
                     self.pop_scope();
                     let tail = self.split_tail(base);
+                    let opaque = self.height_opaque;
                     self.stack = saved.clone();
-                    tail
+                    (tail, opaque)
                 };
                 self.live = saved_live;
+                // PLAN 5.5: then/else must leave compatible stacks at the
+                // join. Slot types are opaque in the checker, so height is
+                // the compatibility criterion. An `if` without `else` has an
+                // implicit else path that pushes nothing, so its then-branch
+                // must leave the pre-`if` height. A branch whose height
+                // depends on an opaque call or builtin (unknown arity) is
+                // not comparable, like the borrow machine's opacity
+                // simplification; the runtime stack-balance backstop
+                // covers it.
+                let comparable = !then_opaque && !else_opaque;
+                if comparable && else_branch.is_empty() {
+                    if !then_tail.is_empty() {
+                        self.emit(
+                            Diagnostic::error(
+                                CODE_IF_JOIN_MISMATCH,
+                                format!(
+                                    "`if` without `else` leaves {} extra value(s) on the stack; the implicit else path pushes none",
+                                    then_tail.len()
+                                ),
+                            )
+                            .with_primary(stmt.span, "")
+                            .with_help(
+                                "drop the value(s) before the end of the then-branch, or add an `else` branch that leaves the same height",
+                            ),
+                        );
+                    }
+                } else if comparable && then_tail.len() != else_tail.len() {
+                    self.emit(
+                        Diagnostic::error(
+                            CODE_IF_JOIN_MISMATCH,
+                            format!(
+                                "then and else branches leave different stack heights ({} vs {} extra value(s))",
+                                then_tail.len(),
+                                else_tail.len()
+                            ),
+                        )
+                        .with_primary(stmt.span, "")
+                        .with_help(
+                            "both branches must leave the same number of values on the stack at the join",
+                        ),
+                    );
+                }
                 // Exactly one branch runs; keep the longer tail (opaque).
                 let tail = if else_tail.len() > then_tail.len() {
                     else_tail
@@ -932,6 +995,10 @@ impl Checker {
                 for slot in tail {
                     self.push_slot(slot);
                 }
+                // The joined tail carries the branches' opacity: an
+                // enclosing branch height that includes it stays
+                // uncomparable.
+                self.height_opaque = saved_opaque || then_opaque || else_opaque;
             }
             StmtKind::For { source, body } => {
                 self.check_expr(source, stmt.span);

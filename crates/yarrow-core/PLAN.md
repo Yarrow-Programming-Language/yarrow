@@ -390,11 +390,23 @@ corpus (std.fs `File.fd` is public) still passes.
 The spec: "Then/else must leave compatible stacks at join." Mismatched
 branch heights are accepted today.
 
-- [ ] 5.5.1 In the checker's `If` walk, compare the then-branch and
+Recorded implementation decisions (5.5):
+
+- The comparison is skipped when either branch's height depends on an
+  opaque call or builtin: the checker models those as one pushed slot
+  with the operands not popped (arity is invisible), so the abstract
+  height is not comparable. This is the same opacity simplification the
+  borrow machine and 5.2 use; the runtime stack-balance backstop covers
+  skipped joins.
+- Opacity is tracked per branch walk and propagates through a nested
+  join (a joined tail built from opaque branches keeps the enclosing
+  height uncomparable), and it resets at each function body.
+
+- [x] 5.5.1 In the checker's `If` walk, compare the then-branch and
   else-branch tails (it already computes both) and reject differing stack
   heights with `E396`. Slot types are opaque in the checker, so height is
   the compatibility criterion.
-- [ ] 5.5.2 An `if` with no `else` must leave the then-branch height at
+- [x] 5.5.2 An `if` with no `else` must leave the then-branch height at
   zero extra values (the else path pushes nothing), so a then-branch that
   leaves values above the pre-`if` height is rejected too. Add `E396` to
   the explain catalog.
