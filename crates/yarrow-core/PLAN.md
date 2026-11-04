@@ -435,28 +435,52 @@ struct, and so on) is an error. Module functions and module types stay
 opaque, so cross-unit calls are unchecked, exactly like the existing
 borrow-machine simplification.
 
-- [ ] 6.1 Extend the checker's abstract `Slot` with a type (kind code or
+Recorded implementation decisions (Stage 6):
+
+- The checker's `Ty` is either a primitive kind code, a named type
+  identified by name (not numeric id: named values only reach the stack
+  through bindings the checker itself typed), a decoded integer literal
+  (for range checks), a type value (typeof results), or opaque. Every
+  `Slot` variant carries one.
+- A named union's declared type accepts any member type at binding: the
+  interpreter wraps values into unions, and the corpus (the grammar tour
+  and the union example) depends on that.
+- `and` / `or` / `xor` / `not` accept bool or integer operands, matching
+  the runtime and the grammar tour (`5 not`, `1 2 and`); `not` yields bool
+  on bools and integer on integers. Comparisons allow mixed integer and
+  float (the runtime promotes); `/` always yields float; `+` `-` `*` yield
+  float when either operand is float.
+- The too-few-operands half of `E312` is skipped in height-opaque regions
+  (after an opaque call or builtin), where the abstract stack height is
+  not comparable; the operand-type half still checks every typed slot.
+- `for` sources reject only known non-bool non-iterable types with
+  `E313`; list and array variables are opaque to the checker, so they
+  skip. The interpreter's `eval_match_cond` now requires bool (the
+  integer-truthy arm is gone), keeping `E324` as the runtime backstop for
+  module units the checker cannot see.
+
+- [x] 6.1 Extend the checker's abstract `Slot` with a type (kind code or
   opaque) and thread it through every `check_expr` arm that pushes a value:
   literals (integer literals get their smallest-fitting kind, floats
   theirs), type values, container literals, calls, builtins, and field
   access.
-- [ ] 6.2 Binding compatibility (`E310`): `VarDecl` and parameter binding
+- [x] 6.2 Binding compatibility (`E310`): `VarDecl` and parameter binding
   check the popped slot's type against the declared type using the coercion
   matrix; `set` checks against the variable's recorded type.
-- [ ] 6.3 Operator operands (`E311`): arithmetic requires numeric operands
+- [x] 6.3 Operator operands (`E311`): arithmetic requires numeric operands
   of compatible kinds, bitwise requires integers, logical `and` / `or` /
   `not` requires bools, `~` requires strings, comparisons require
   matching families, and pointer arithmetic follows the existing pointer
   slot rule.
-- [ ] 6.4 Call signatures (`E312`): for functions visible to the checker
+- [x] 6.4 Call signatures (`E312`): for functions visible to the checker
   (main unit and its nested functions and methods), reject a call with too
   few operands for the parameter count and type-check the operands against
   the parameter types; unknown and module functions stay opaque.
-- [ ] 6.5 Conditions (`E313`): `if` and `for` conditions and `match` case
+- [x] 6.5 Conditions (`E313`): `if` and `for` conditions and `match` case
   conditions must be bool. The interpreter's `eval_match_cond` currently
   accepts integers as truthy; tighten it to bool so the runtime agrees with
   the check.
-- [ ] 6.6 Add `E310` through `E313` to the explain catalog, each naming the
+- [x] 6.6 Add `E310` through `E313` to the explain catalog, each naming the
   construct (binding, operator, call, condition) and the coercion the spec
   allows.
 

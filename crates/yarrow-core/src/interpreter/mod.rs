@@ -2492,11 +2492,10 @@ impl Interpreter {
         let slot = self.pop(stack, span, "match condition")?;
         match slot.value {
             Value::Bool(b) => Ok(b),
-            Value::Int(n) => Ok(n != 0),
             other => {
                 other.drop_owned();
                 Err(InterpretError::new(
-                    "match condition must be bool or integer",
+                    "match condition must be bool",
                     span,
                     "E324",
                 ))
@@ -5152,7 +5151,7 @@ fn int_pow(base: i64, mut exp: u32) -> i64 {
 /// Inclusive value range of an integer carrier kind, or `None` for
 /// non-integer kinds. `u64` discriminants above `i64::MAX` are stored as their
 /// bit pattern; the runtime value representation is `i64`.
-fn int_carrier_range(kind: u64) -> Option<(i128, i128)> {
+pub(crate) fn int_carrier_range(kind: u64) -> Option<(i128, i128)> {
     Some(match kind {
         1 => (-128, 127),
         2 => (-32768, 32767),
@@ -5167,7 +5166,8 @@ fn int_carrier_range(kind: u64) -> Option<(i128, i128)> {
 }
 
 /// Runtime kind codes aligned with `compiler::types::kind_code` for primitives.
-fn primitive_kind_code(name: &str) -> Option<u64> {
+/// Shared with the checker (PLAN 6.1), which reuses the same scheme.
+pub(crate) fn primitive_kind_code(name: &str) -> Option<u64> {
     Some(match name {
         "bool" => 0,
         "i8" => 1,
@@ -5188,7 +5188,7 @@ fn primitive_kind_code(name: &str) -> Option<u64> {
     })
 }
 
-fn primitive_to_kind(p: Primitive) -> Option<u64> {
+pub(crate) fn primitive_to_kind(p: Primitive) -> Option<u64> {
     use Primitive::*;
     Some(match p {
         Bool => 0,

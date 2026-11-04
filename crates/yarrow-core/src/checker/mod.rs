@@ -53,6 +53,27 @@
 //!   checker can see; opaque operands (module calls, builtins, variables)
 //!   keep the runtime E308 backstop, and `handle` is allowed anywhere.
 //!
+//! PLAN Stage 6 (static type checking) extends the abstract slots with a
+//! static type: the interpreter's kind-code scheme (primitive kind codes
+//! plus named-type resolution through this unit's declarations). The
+//! coercion matrix: a value binds to a declared type when the kinds are
+//! equal; an integer value binds to any integer type (widening, with a
+//! literal's value range-checked when statically known); a float value
+//! binds to any float type; every other combination is an error. Module
+//! functions and module types stay opaque, so cross-unit calls are
+//! unchecked, exactly like the borrow-machine simplification.
+//!
+//! - E310: a binding (`const` / `mutable` / `static` declaration or `set`)
+//!   whose value does not coerce to the declared type.
+//! - E311: an operator whose operands do not match (arithmetic needs
+//!   numbers, `//` `%` `^` and the shifts need integers, `and` / `or` /
+//!   `xor` / `not` need bools or integers, `~` needs strings,
+//!   comparisons need matching families).
+//! - E312: a call to a visible function with too few operands, or with an
+//!   operand that does not coerce to its parameter type.
+//! - E313: an `if` / `for` condition or `match` case condition that is
+//!   not bool.
+//!
 //! Simplifications (documented per PLAN 3.1): calls whose signature is not
 //! visible to the checker (module functions reached through `require`
 //! aliases) are assumed to consume every live on-stack borrow and to push
@@ -67,10 +88,12 @@
 use std::collections::HashMap;
 
 use crate::diagnostics::{Diagnostic, DiagnosticBatch, Span};
+use crate::interpreter::{int_carrier_range, primitive_kind_code, primitive_to_kind};
 use crate::parser::ast::{
     BinOp, EnumDecl, ErrorDecl, Expr, Function, MatchCaseKind, Mutability, Primitive, Program,
     StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnionDecl,
 };
+use crate::parser::literals::decode_int_literal;
 use crate::signature::{Signature, classify_signature};
 
 /// Diagnostic code reserved for the single-borrow rule (PLAN 3.1.1).
@@ -104,6 +127,18 @@ const CODE_UNION_DUPLICATE_MEMBER: &str = "E385";
 /// Diagnostic code reserved for an `if` whose branches leave incompatible
 /// stacks at the join (PLAN 5.5).
 const CODE_IF_JOIN_MISMATCH: &str = "E396";
+/// Diagnostic code reserved for a binding whose value does not coerce to
+/// the declared type (PLAN 6.2).
+const CODE_BIND_TYPE_MISMATCH: &str = "E310";
+/// Diagnostic code reserved for an operator with mismatched operand
+/// types (PLAN 6.3).
+const CODE_OPERATOR_TYPE_MISMATCH: &str = "E311";
+/// Diagnostic code reserved for a call with too few operands or an
+/// operand that does not coerce to its parameter type (PLAN 6.4).
+const CODE_CALL_TYPE_MISMATCH: &str = "E312";
+/// Diagnostic code reserved for a non-bool `if` / `for` condition or
+/// `match` case condition (PLAN 6.5).
+const CODE_CONDITION_NOT_BOOL: &str = "E313";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -122,6 +157,13 @@ pub struct FuncSummary {
     pub param_count: usize,
     /// Number of declared return types (`with ...`).
     pub return_count: usize,
+    /// Declared parameter types, resolved through the unit's declarations
+    /// (PLAN 6.4). A `reference<T>` parameter resolves to its pointee so
+    /// method receivers type-check; module types stay opaque.
+    pub params: Vec<Ty>,
+    /// Declared return types, resolved (PLAN 6.1). A fallible union
+    /// return is opaque: its envelope shape is a runtime concern.
+    pub returns: Vec<Ty>,
     /// PLAN 5.2.1: the `with` return is the fallible `|payload error|`
     /// form (Stage 4 predicate), so the call result is an error envelope.
     pub fallible: bool,
@@ -200,20 +242,178 @@ impl BorrowKey {
     }
 }
 
+/// Statically known type of one abstract slot (PLAN 6.1). The checker
+/// reuses the interpreter's kind-code scheme: primitives map to their
+/// runtime kind codes (`primitive_to_kind`), and named types resolve
+/// through this unit's declarations. Named types are identified by name
+/// rather than by the interpreter's numeric ids: values of named types
+/// reach the stack only through bindings the checker itself typed, so
+/// name equality is the same test the ids encode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ty {
+    /// A primitive kind code (bool=0, i8=1, ..., rune=11, f16=12, ...,
+    /// string=16, error=0x51).
+    Prim(u64),
+    /// A named type declared in this unit (struct, enum, union, error
+    /// type).
+    Named(String),
+    /// An integer literal with its decoded value: it binds to any
+    /// integer type whose range contains the value (PLAN 6.2 widening
+    /// with the literal's range check).
+    IntLit(i128),
+    /// A type used as a value: `typeof` results and type-value words.
+    TypeValue,
+    /// Type not statically known (module values, opaque words).
+    Opaque,
+}
+
+impl Ty {
+    /// Integer family: the signed and unsigned integer kinds plus
+    /// integer literals.
+    fn is_int(&self) -> bool {
+        match self {
+            Ty::Prim(k) => is_int_kind(*k),
+            Ty::IntLit(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Float family: `f16`, `f32`, `f64`.
+    fn is_float(&self) -> bool {
+        matches!(self, Ty::Prim(k) if is_float_kind(*k))
+    }
+
+    fn is_numeric(&self) -> bool {
+        self.is_int() || self.is_float()
+    }
+
+    fn is_bool(&self) -> bool {
+        matches!(self, Ty::Prim(0))
+    }
+
+    fn is_string(&self) -> bool {
+        matches!(self, Ty::Prim(16))
+    }
+}
+
+/// Whether a kind code is one of the integer primitives (i8..i64, u8..u64).
+fn is_int_kind(k: u64) -> bool {
+    matches!(k, 1..=4 | 6..=9)
+}
+
+/// Whether a kind code is one of the float primitives (f16, f32, f64).
+fn is_float_kind(k: u64) -> bool {
+    matches!(k, 12..=14)
+}
+
+/// Human-readable name of a type, for diagnostics.
+fn ty_label(ty: &Ty) -> String {
+    match ty {
+        Ty::Prim(k) => kind_label(*k),
+        Ty::Named(n) => n.clone(),
+        Ty::IntLit(n) => format!("integer literal {n}"),
+        Ty::TypeValue => "a type value".to_string(),
+        Ty::Opaque => "an opaque value".to_string(),
+    }
+}
+
+/// Name of a primitive kind code, mirroring the interpreter's tables.
+fn kind_label(k: u64) -> String {
+    match k {
+        0 => "bool",
+        1 => "i8",
+        2 => "i16",
+        3 => "i32",
+        4 => "i64",
+        6 => "u8",
+        7 => "u16",
+        8 => "u32",
+        9 => "u64",
+        11 => "rune",
+        12 => "f16",
+        13 => "f32",
+        14 => "f64",
+        16 => "string",
+        0x51 => "error",
+        _ => "value",
+    }
+    .to_string()
+}
+
+/// Human-readable name of a declared type, for diagnostics.
+fn type_label(ty: &Type) -> String {
+    match &ty.kind {
+        TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
+        TypeKind::Named(n) => n.clone(),
+        TypeKind::Array { element, size } => match size {
+            Some(n) => format!("array<{} {n}>", type_label(element)),
+            None => format!("array<{}>", type_label(element)),
+        },
+        TypeKind::List { element } => format!("list<{}>", type_label(element)),
+        TypeKind::Hashmap { key, value } => {
+            format!("hashmap<{} {}>", type_label(key), type_label(value))
+        }
+        TypeKind::Reference { inner } => format!("reference<{}>", type_label(inner)),
+        TypeKind::Pointer { inner } => format!("pointer<{}>", type_label(inner)),
+        TypeKind::Union(_) => "union".to_string(),
+    }
+}
+
+/// PLAN 6.2 coercion matrix: a value binds to a declared type when the
+/// kinds are equal; an integer value binds to any integer type (widening,
+/// with the literal's value range-checked when statically known); a
+/// float value binds to any float type; every other combination (bool to
+/// integer, float to integer, string to anything else, struct to another
+/// struct, and so on) is an error. An opaque value or declared type
+/// skips the check.
+fn binds(value: &Ty, declared: &Ty) -> bool {
+    match (value, declared) {
+        (Ty::Opaque, _) | (_, Ty::Opaque) => true,
+        (Ty::IntLit(n), Ty::Prim(k)) => {
+            is_int_kind(*k) && int_carrier_range(*k).is_some_and(|(lo, hi)| *n >= lo && *n <= hi)
+        }
+        (Ty::Prim(v), Ty::Prim(d)) => {
+            v == d
+                || (is_int_kind(*v) && is_int_kind(*d))
+                || (is_float_kind(*v) && is_float_kind(*d))
+        }
+        (Ty::Named(v), Ty::Named(d)) => v == d,
+        _ => false,
+    }
+}
+
 /// One abstract slot of the operand stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Slot {
     /// Owned heap temporary; the stack frees it at pop / drop / consume.
-    Owned(u32),
+    Owned(u32, Ty),
     /// Copy value: integers, floats, bool, rune, enum, array, type.
-    Copy,
+    Copy(Ty),
     /// `pointer<T>` value: a copy value whose arithmetic is pointer
     /// arithmetic (PLAN 3.5.2).
-    Pointer,
+    Pointer(Ty),
     /// Live borrow of a value (from the `borrow` word or a non-copy read).
-    Borrow(BorrowKey),
-    /// Opaque value: call results, foreign values, reference reads.
-    Unknown,
+    Borrow(BorrowKey, Ty),
+    /// Untracked value (call results, foreign values, reference reads):
+    /// ownership and borrows are not modeled, but the static type may
+    /// still be known (PLAN 6.1).
+    Unknown(Ty),
+}
+
+impl Slot {
+    /// The slot's static type.
+    fn ty(&self) -> &Ty {
+        match self {
+            Slot::Owned(_, ty) | Slot::Copy(ty) | Slot::Pointer(ty) => ty,
+            Slot::Borrow(_, ty) => ty,
+            Slot::Unknown(ty) => ty,
+        }
+    }
+
+    /// An untracked value of unknown type.
+    fn opaque() -> Slot {
+        Slot::Unknown(Ty::Opaque)
+    }
 }
 
 /// What the checker knows about one variable binding.
@@ -228,6 +428,9 @@ struct VarInfo {
     is_reference: bool,
     /// Named struct type, for method call resolution.
     struct_name: Option<String>,
+    /// The declared type (PLAN 6.1): reads push it, and `set` checks
+    /// against it (PLAN 6.2).
+    ty: Ty,
     /// Live borrow held through this `reference<T>` binding.
     holds: Option<BorrowKey>,
     /// `move` transferred the value away: further use is E373 (PLAN 3.2.1).
@@ -388,6 +591,16 @@ impl Checker {
             classify_signature(&f.returns, &|n| self.resolves_error_type(n)),
             Signature::Fallible { .. }
         );
+        let params = f
+            .params
+            .iter()
+            .map(|p| self.resolve_type(&p.ty))
+            .collect::<Vec<_>>();
+        let returns = f
+            .returns
+            .iter()
+            .map(|t| self.resolve_type(t))
+            .collect::<Vec<_>>();
         self.decls.functions.insert(
             fq.to_string(),
             FuncSummary {
@@ -396,6 +609,8 @@ impl Checker {
                 is_method,
                 param_count: f.params.len(),
                 return_count: f.returns.len(),
+                params,
+                returns,
                 fallible,
             },
         );
@@ -430,7 +645,7 @@ impl Checker {
     /// ends at `pop`).
     fn pop_releasing(&mut self) -> Option<Slot> {
         let slot = self.stack.pop()?;
-        if let Slot::Borrow(key) = &slot {
+        if let Slot::Borrow(key, _) = &slot {
             self.live.remove(key);
         }
         Some(slot)
@@ -449,8 +664,9 @@ impl Checker {
     }
 
     /// Create a borrow of `key`, rejecting a second live borrow of the same
-    /// value (PLAN 3.1.1, E375).
-    fn create_borrow(&mut self, key: BorrowKey, span: Span) -> Slot {
+    /// value (PLAN 3.1.1, E375). The borrow slot carries the borrowed
+    /// value's static type (PLAN 6.1).
+    fn create_borrow(&mut self, key: BorrowKey, ty: Ty, span: Span) -> Slot {
         if self.live.contains_key(&key) {
             self.emit(
                 Diagnostic::error(
@@ -462,10 +678,10 @@ impl Checker {
                 )
                 .with_primary(span, ""),
             );
-            return Slot::Borrow(key);
+            return Slot::Borrow(key, ty);
         }
         self.live.insert(key.clone(), self.scopes.len() - 1);
-        Slot::Borrow(key)
+        Slot::Borrow(key, ty)
     }
 
     /// A call whose signature is not visible (module function, builtin):
@@ -478,11 +694,11 @@ impl Checker {
         self.height_opaque = true;
         self.live.clear();
         for slot in &mut self.stack {
-            if matches!(slot, Slot::Borrow(_)) {
-                *slot = Slot::Unknown;
+            if let Slot::Borrow(_, ty) = slot {
+                *slot = Slot::Unknown(ty.clone());
             }
         }
-        self.push_slot(Slot::Unknown);
+        self.push_slot(Slot::opaque());
     }
 
     /// Whether any `reference<T>` variable in scope holds a live borrow of
@@ -512,10 +728,10 @@ impl Checker {
             }
         }
         for slot in &mut self.stack {
-            if let Slot::Borrow(held) = slot
+            if let Slot::Borrow(held, ty) = slot
                 && held == key
             {
-                *slot = Slot::Unknown;
+                *slot = Slot::Unknown(ty.clone());
             }
         }
     }
@@ -533,12 +749,13 @@ impl Checker {
         }
         let depth = self.scopes.len();
         self.live.retain(|_, created| *created < depth);
-        // Slots whose borrow just ended become opaque.
+        // Slots whose borrow just ended become untracked; their static
+        // type survives (PLAN 6.1).
         for slot in &mut self.stack {
-            if let Slot::Borrow(key) = slot
+            if let Slot::Borrow(key, ty) = slot
                 && !self.live.contains_key(key)
             {
-                *slot = Slot::Unknown;
+                *slot = Slot::Unknown(ty.clone());
             }
         }
     }
@@ -581,6 +798,48 @@ impl Checker {
         }
     }
 
+    /// PLAN 6.2 binding check with the union rule: a named union accepts
+    /// any of its member types at init and `set` (the runtime wraps the
+    /// value), and a value of the union itself binds as-is. Everything
+    /// else goes through the coercion matrix.
+    fn binds_to(&self, value: &Ty, declared: &Ty) -> bool {
+        if let Ty::Named(name) = declared
+            && let Some(union) = self.decls.unions.get(name)
+        {
+            return value == declared
+                || union
+                    .types
+                    .iter()
+                    .any(|member| binds(value, &self.resolve_type(member)));
+        }
+        binds(value, declared)
+    }
+
+    /// PLAN 6.1: resolve a declared type to the checker's type
+    /// representation. Primitives map to their runtime kind codes; named
+    /// types resolve through this unit's declarations (a name the unit
+    /// does not declare is a module type and stays opaque). Container,
+    /// pointer, and union types are opaque: their values arrive as opaque
+    /// slots (literals, module calls), so the binding check skips them.
+    /// A reference resolves to its pointee so method receivers type-check
+    /// against `reference<T>` parameters.
+    fn resolve_type(&self, ty: &Type) -> Ty {
+        match &ty.kind {
+            TypeKind::Primitive(p) => primitive_to_kind(*p).map(Ty::Prim).unwrap_or(Ty::Opaque),
+            TypeKind::Named(n) => {
+                if let Some(k) = primitive_kind_code(n) {
+                    return Ty::Prim(k);
+                }
+                if self.is_decl_name(n) {
+                    return Ty::Named(n.clone());
+                }
+                Ty::Opaque
+            }
+            TypeKind::Reference { inner } => self.resolve_type(inner),
+            _ => Ty::Opaque,
+        }
+    }
+
     /// Bind `name` to the value described by `slot`, with the shape of `ty`
     /// and the declared mutability.
     fn bind_var(&mut self, name: &str, ty: &Type, mutability: Mutability, slot: Slot) {
@@ -591,6 +850,7 @@ impl Checker {
             TypeKind::Named(n) if self.decls.is_struct(n) => Some(n.clone()),
             _ => None,
         };
+        let resolved = self.resolve_type(ty);
         self.bind_var_info(
             name,
             VarInfo {
@@ -598,6 +858,7 @@ impl Checker {
                 is_pointer,
                 is_reference,
                 struct_name,
+                ty: resolved,
                 holds: None,
                 moved: false,
                 mutability,
@@ -618,9 +879,9 @@ impl Checker {
         match (&slot, info.is_reference) {
             // A borrow bound into a `reference<T>` variable stays live,
             // held by that variable.
-            (Slot::Borrow(key), true) => info.holds = Some(key.clone()),
+            (Slot::Borrow(key, _), true) => info.holds = Some(key.clone()),
             // Any other binding consumes the borrow.
-            (Slot::Borrow(key), false) => {
+            (Slot::Borrow(key, _), false) => {
                 self.live.remove(key);
             }
             _ => {}
@@ -650,11 +911,12 @@ impl Checker {
         self.caller_fallible = self.check_return_signature(f);
 
         for param in &f.params {
+            let ty = self.resolve_type(&param.ty);
             let slot = match &param.ty.kind {
-                TypeKind::Reference { .. } => Slot::Unknown,
-                TypeKind::Pointer { .. } => Slot::Pointer,
-                _ if self.is_copy_type(&param.ty) => Slot::Copy,
-                _ => Slot::Owned(self.fresh_temp()),
+                TypeKind::Reference { .. } => Slot::Unknown(ty),
+                TypeKind::Pointer { .. } => Slot::Pointer(ty),
+                _ if self.is_copy_type(&param.ty) => Slot::Copy(ty),
+                _ => Slot::Owned(self.fresh_temp(), ty),
             };
             self.push_slot(slot);
         }
@@ -674,7 +936,8 @@ impl Checker {
                     is_copy: false,
                     is_pointer: false,
                     is_reference: true,
-                    struct_name,
+                    struct_name: struct_name.clone(),
+                    ty: struct_name.map(Ty::Named).unwrap_or(Ty::Opaque),
                     holds: None,
                     moved: false,
                     mutability: Mutability::Mutable,
@@ -805,6 +1068,24 @@ impl Checker {
     // Statements
     // -----------------------------------------------------------------
 
+    /// PLAN 6.5: `if` conditions and `match` case conditions must be bool.
+    /// An opaque condition (module value, untyped slot) skips the check.
+    fn check_condition(&mut self, slot: Option<Slot>, what: &str, span: Span) {
+        if let Some(slot) = slot
+            && !matches!(slot.ty(), Ty::Opaque)
+            && !slot.ty().is_bool()
+        {
+            self.emit(
+                Diagnostic::error(
+                    CODE_CONDITION_NOT_BOOL,
+                    format!("{what} must be bool, not {}", ty_label(slot.ty())),
+                )
+                .with_primary(span, "")
+                .with_help("comparisons push bool; compare or convert the value first"),
+            );
+        }
+    }
+
     fn check_stmt(&mut self, stmt: &Stmt) {
         self.current_span = stmt.span;
         match &stmt.kind {
@@ -829,14 +1110,34 @@ impl Checker {
                     }
                     None => self.pop_slot_raw(),
                 }
-                .unwrap_or(Slot::Unknown);
+                .unwrap_or_else(Slot::opaque);
+                // PLAN 6.2: binding compatibility. The popped value must
+                // coerce to the declared type (E310).
+                let declared = self.resolve_type(ty);
+                if !self.binds_to(slot.ty(), &declared) {
+                    self.emit(
+                        Diagnostic::error(
+                            CODE_BIND_TYPE_MISMATCH,
+                            format!(
+                                "cannot bind {} to '{name}': the declaration's type is {}",
+                                ty_label(slot.ty()),
+                                type_label(ty)
+                            ),
+                        )
+                        .with_primary(stmt.span, "")
+                        .with_help(
+                            "implicit coercion covers the integer types (and the float types); \\\
+                             convert the value or change the declared type",
+                        ),
+                    );
+                }
                 self.bind_var(name, ty, *mutability, slot);
             }
             StmtKind::Set { target, value } => {
                 if let Some(value) = value {
                     self.check_expr(value, stmt.span);
                 }
-                let slot = self.pop_slot_raw().unwrap_or(Slot::Unknown);
+                let slot = self.pop_slot_raw().unwrap_or_else(Slot::opaque);
                 if let Expr::Variable { name } = target
                     && let Some(var) = self.lookup_var(name).cloned()
                 {
@@ -862,6 +1163,25 @@ impl Checker {
                             ),
                         );
                     }
+                    // PLAN 6.2: `set` checks the value against the
+                    // variable's recorded type (E310).
+                    if !self.binds_to(slot.ty(), &var.ty) {
+                        self.emit(
+                            Diagnostic::error(
+                                CODE_BIND_TYPE_MISMATCH,
+                                format!(
+                                    "cannot set '{name}' ({}): the value is {}",
+                                    ty_label(&var.ty),
+                                    ty_label(slot.ty())
+                                ),
+                            )
+                            .with_primary(stmt.span, "")
+                            .with_help(
+                                "implicit coercion covers the integer types (and the float types); \\\
+                                 convert the value or re-declare with the right type",
+                            ),
+                        );
+                    }
                     let mut info = var;
                     // The old value is dropped: a borrow it held ends.
                     if let Some(key) = info.holds.take() {
@@ -870,8 +1190,8 @@ impl Checker {
                     // `set` re-owns the name, even after a `move`.
                     info.moved = false;
                     match (&slot, info.is_reference) {
-                        (Slot::Borrow(key), true) => info.holds = Some(key.clone()),
-                        (Slot::Borrow(key), false) => {
+                        (Slot::Borrow(key, _), true) => info.holds = Some(key.clone()),
+                        (Slot::Borrow(key, _), false) => {
                             self.live.remove(key);
                         }
                         _ => {}
@@ -881,7 +1201,7 @@ impl Checker {
                         .expect("scope stack is never empty")
                         .vars
                         .insert(name.clone(), info);
-                } else if let Slot::Borrow(key) = &slot {
+                } else if let Slot::Borrow(key, _) = &slot {
                     // Field target: the value's borrow is consumed.
                     self.live.remove(key);
                 }
@@ -915,7 +1235,9 @@ impl Checker {
                 else_branch,
             } => {
                 self.check_expr(condition, stmt.span);
-                self.pop_n(1);
+                // PLAN 6.5: the condition must be bool (E313).
+                let condition = self.pop_releasing();
+                self.check_condition(condition, "if condition", stmt.span);
                 let base = self.stack.len();
                 let saved = self.stack.clone();
                 let saved_live = self.live.clone();
@@ -1002,8 +1324,30 @@ impl Checker {
             }
             StmtKind::For { source, body } => {
                 self.check_expr(source, stmt.span);
-                // The loop consumes its condition / iterable.
-                self.pop_n(1);
+                // The loop consumes its condition / iterable. PLAN 6.5:
+                // the source is a bool condition or an array / list
+                // iterable; a value of any other known type is E313.
+                // Iterable bindings (list, array) are opaque to the
+                // checker, so every known non-bool source is rejected.
+                let source = self.pop_releasing();
+                if let Some(slot) = &source
+                    && !matches!(slot.ty(), Ty::Opaque)
+                    && !slot.ty().is_bool()
+                {
+                    self.emit(
+                        Diagnostic::error(
+                            CODE_CONDITION_NOT_BOOL,
+                            format!(
+                                "for source must be a bool condition or an array or list iterable, not {}",
+                                ty_label(slot.ty())
+                            ),
+                        )
+                        .with_primary(stmt.span, "")
+                        .with_help(
+                            "comparisons push bool; iterate a list or array, or compare in the condition",
+                        ),
+                    );
+                }
                 let saved = self.stack.clone();
                 let saved_live = self.live.clone();
                 self.push_scope();
@@ -1298,7 +1642,7 @@ impl Checker {
             // Ownership (and a held borrow) transfers to the target; the
             // target starts out owning its value.
             info.moved = false;
-            self.bind_var_info(target, info, Slot::Unknown);
+            self.bind_var_info(target, info, Slot::opaque());
             if let Some(src) = self
                 .scopes
                 .iter_mut()
@@ -1311,15 +1655,19 @@ impl Checker {
             return;
         }
         self.check_expr(source, span);
-        let slot = self.pop_releasing().unwrap_or(Slot::Unknown);
-        // The target owns the moved value; its static type is opaque here.
+        let slot = self.pop_releasing().unwrap_or_else(Slot::opaque);
+        // The target owns the moved value; its static type is the moved
+        // slot's type (opaque when the value is opaque).
+        let ty = slot.ty().clone();
+        let is_pointer = matches!(slot, Slot::Pointer(_));
         self.bind_var_info(
             target,
             VarInfo {
-                is_copy: matches!(slot, Slot::Copy | Slot::Pointer),
-                is_pointer: matches!(slot, Slot::Pointer),
+                is_copy: matches!(slot, Slot::Copy(_) | Slot::Pointer(_)),
+                is_pointer,
                 is_reference: false,
                 struct_name: None,
+                ty,
                 holds: None,
                 moved: false,
                 mutability: Mutability::Mutable,
@@ -1350,11 +1698,13 @@ impl Checker {
         for case in cases {
             if let MatchCaseKind::Condition(condition) = &case.kind {
                 // Conditions run with the subject on top of the current
-                // stack; simulate them on a scratch copy.
+                // stack; simulate them on a scratch copy. PLAN 6.5: the
+                // condition must be bool (E313).
                 let saved = self.stack.clone();
                 let saved_live = self.live.clone();
                 self.check_expr(condition, case.span);
-                self.pop_n(1);
+                let condition_slot = self.pop_releasing();
+                self.check_condition(condition_slot, "match condition", case.span);
                 self.live = saved_live;
                 self.stack = saved;
             }
@@ -1362,7 +1712,7 @@ impl Checker {
             let saved_live = self.live.clone();
             if has_subject && matches!(case.kind, MatchCaseKind::Type(_)) {
                 // The arm receives a borrowed reference to the member.
-                self.push_slot(Slot::Unknown);
+                self.push_slot(Slot::opaque());
             }
             self.push_scope();
             self.check_body(&case.body);
@@ -1396,7 +1746,7 @@ impl Checker {
                 self.push_slot(slot);
             }
         }
-        if let Some(Slot::Borrow(key)) = subject_slot {
+        if let Some(Slot::Borrow(key, _)) = subject_slot {
             self.live.remove(&key);
         }
     }
@@ -1410,14 +1760,22 @@ impl Checker {
     fn check_expr(&mut self, expr: &Expr, span: Span) {
         self.current_span = span;
         match expr {
-            Expr::Integer { .. }
-            | Expr::Float { .. }
-            | Expr::Bool { .. }
-            | Expr::Rune { .. }
-            | Expr::TypeValue { .. } => self.push_slot(Slot::Copy),
+            // PLAN 6.1: literals push their smallest-fitting type; an
+            // integer literal keeps its decoded value so the binding
+            // check can range-check it against the declared type.
+            Expr::Integer { value } => {
+                let ty = decode_int_literal(value)
+                    .map(Ty::IntLit)
+                    .unwrap_or(Ty::Opaque);
+                self.push_slot(Slot::Copy(ty));
+            }
+            Expr::Float { .. } => self.push_slot(Slot::Copy(Ty::Prim(14))),
+            Expr::Bool { .. } => self.push_slot(Slot::Copy(Ty::Prim(0))),
+            Expr::Rune { .. } => self.push_slot(Slot::Copy(Ty::Prim(11))),
+            Expr::TypeValue { .. } => self.push_slot(Slot::Copy(Ty::TypeValue)),
             Expr::String { .. } => {
                 let temp = self.fresh_temp();
-                self.push_slot(Slot::Owned(temp));
+                self.push_slot(Slot::Owned(temp, Ty::Prim(16)));
             }
             Expr::Variable { name } => self.check_var_read(name, span),
             Expr::Member { base, member } => self.check_member(base, member, span),
@@ -1429,12 +1787,14 @@ impl Checker {
             Expr::ApplyBin(op) => self.apply_bin(*op, span),
             Expr::Unary { operand, .. } => {
                 self.check_expr(operand, span);
-                self.pop_n(1);
-                self.push_slot(Slot::Copy);
+                let slot = self.pop_releasing();
+                let result = self.not_result(slot, span);
+                self.push_slot(result);
             }
             Expr::ApplyUn(_) => {
-                self.pop_n(1);
-                self.push_slot(Slot::Copy);
+                let slot = self.pop_releasing();
+                let result = self.not_result(slot, span);
+                self.push_slot(result);
             }
             Expr::Call { target } => self.check_call(target, span),
             Expr::Unwrap { inner } => {
@@ -1466,7 +1826,7 @@ impl Checker {
                 }
                 self.check_expr(inner, span);
                 self.pop_n(1);
-                self.push_slot(Slot::Unknown);
+                self.push_slot(Slot::opaque());
             }
             Expr::Typeof { inner } => {
                 self.check_expr(inner, span);
@@ -1482,12 +1842,12 @@ impl Checker {
                 self.check_expr(inner, span);
                 self.require_unsafe(span, "load through pointer<T>");
                 self.pop_n(1);
-                self.push_slot(Slot::Unknown);
+                self.push_slot(Slot::opaque());
             }
             Expr::ApplyLoad => {
                 self.require_unsafe(span, "load through pointer<T>");
                 self.pop_n(1);
-                self.push_slot(Slot::Unknown);
+                self.push_slot(Slot::opaque());
             }
             Expr::Store { addr, value } => {
                 self.check_expr(addr, span);
@@ -1509,7 +1869,7 @@ impl Checker {
                     self.check_expr(element, span);
                 }
                 self.pop_n(elements.len());
-                self.push_slot(Slot::Copy);
+                self.push_slot(Slot::Copy(Ty::Opaque));
             }
             Expr::List(elements) => {
                 for element in elements {
@@ -1517,7 +1877,7 @@ impl Checker {
                 }
                 self.pop_n(elements.len());
                 let temp = self.fresh_temp();
-                self.push_slot(Slot::Owned(temp));
+                self.push_slot(Slot::Owned(temp, Ty::Opaque));
             }
             Expr::Map(entries) => {
                 for (key, value) in entries {
@@ -1526,7 +1886,7 @@ impl Checker {
                 }
                 self.pop_n(entries.len() * 2);
                 let temp = self.fresh_temp();
-                self.push_slot(Slot::Owned(temp));
+                self.push_slot(Slot::Owned(temp, Ty::Opaque));
             }
             Expr::StructLit(fields) => {
                 for (_, value) in fields {
@@ -1534,9 +1894,9 @@ impl Checker {
                 }
                 self.pop_n(fields.len());
                 let temp = self.fresh_temp();
-                self.push_slot(Slot::Owned(temp));
+                self.push_slot(Slot::Owned(temp, Ty::Opaque));
             }
-            Expr::EmptyMapOrStruct => self.push_slot(Slot::Unknown),
+            Expr::EmptyMapOrStruct => self.push_slot(Slot::opaque()),
             Expr::Seq(elements) => {
                 for (element, element_span) in elements {
                     self.check_expr(element, *element_span);
@@ -1545,18 +1905,50 @@ impl Checker {
         }
     }
 
+    /// PLAN 6.3: `not` is logical on bools and bitwise on integers (the
+    /// grammar tour's `5 not`); any other operand type is E311. The
+    /// result keeps the operand's family.
+    fn not_result(&mut self, slot: Option<Slot>, span: Span) -> Slot {
+        let Some(slot) = slot else {
+            return Slot::opaque();
+        };
+        let ty = slot.ty().clone();
+        if matches!(ty, Ty::Opaque) {
+            Slot::opaque()
+        } else if ty.is_bool() {
+            Slot::Copy(Ty::Prim(0))
+        } else if ty.is_int() {
+            Slot::Copy(Ty::Prim(4))
+        } else {
+            self.emit(
+                Diagnostic::error(
+                    CODE_OPERATOR_TYPE_MISMATCH,
+                    format!(
+                        "'not' requires a bool or integer operand, not {}",
+                        ty_label(&ty)
+                    ),
+                )
+                .with_primary(span, "")
+                .with_help("'not' is logical on bools and bitwise on integers"),
+            );
+            Slot::Copy(Ty::Prim(4))
+        }
+    }
+
     /// Reading a variable pushes a copy (copy types), a borrow (non-copy
-    /// types), or an opaque lend (`reference<T>` bindings).
+    /// types), or an opaque lend (`reference<T>` bindings). The slot
+    /// carries the binding's declared type (PLAN 6.1).
     fn check_var_read(&mut self, name: &str, span: Span) {
         let Some(var) = self.lookup_var(name) else {
             // Unknown name: a named type used as a value, or a function
             // name; opaque.
-            self.push_slot(Slot::Unknown);
+            self.push_slot(Slot::opaque());
             return;
         };
         if var.moved {
             // PLAN 3.2.1: the name was emptied by `move`.
             let is_copy = var.is_copy;
+            let ty = var.ty.clone();
             self.emit(
                 Diagnostic::error(
                     CODE_USE_AFTER_MOVE,
@@ -1566,21 +1958,25 @@ impl Checker {
             );
             // The read still happens at runtime; model it without borrow
             // tracking.
-            self.push_slot(if is_copy { Slot::Copy } else { Slot::Unknown });
+            self.push_slot(if is_copy {
+                Slot::Copy(ty)
+            } else {
+                Slot::Unknown(ty)
+            });
             return;
         }
         if var.is_reference {
             // Reading a reference lends it; the binding keeps holding the
             // borrow, so this creates no tracked borrow.
-            self.push_slot(Slot::Unknown);
+            self.push_slot(Slot::Unknown(var.ty.clone()));
         } else if var.is_copy {
             self.push_slot(if var.is_pointer {
-                Slot::Pointer
+                Slot::Pointer(var.ty.clone())
             } else {
-                Slot::Copy
+                Slot::Copy(var.ty.clone())
             });
         } else {
-            let slot = self.create_borrow(BorrowKey::Var(name.to_string()), span);
+            let slot = self.create_borrow(BorrowKey::Var(name.to_string()), var.ty.clone(), span);
             self.push_slot(slot);
         }
     }
@@ -1598,13 +1994,15 @@ impl Checker {
             }
             // Enum members and error tags are copy values. PLAN 3.2: a
             // string-carried enum member is a heap string, so it pushes an
-            // owned temporary; `dup` on it is the non-copy E371.
+            // owned temporary; `dup` on it is the non-copy E371. PLAN 6.1:
+            // member values are opaque (the checker does not model field
+            // or member types).
             if self.is_decl_name(name) {
                 if self.decls.is_string_enum(name) {
                     let temp = self.fresh_temp();
-                    self.push_slot(Slot::Owned(temp));
+                    self.push_slot(Slot::Owned(temp, Ty::Opaque));
                 } else {
-                    self.push_slot(Slot::Copy);
+                    self.push_slot(Slot::Copy(Ty::Opaque));
                 }
                 return;
             }
@@ -1621,12 +2019,12 @@ impl Checker {
                 );
             }
             // Field access on a local, or a module item: opaque.
-            self.push_slot(Slot::Unknown);
+            self.push_slot(Slot::opaque());
             return;
         }
         self.check_expr(base, span);
         self.pop_n(1);
-        self.push_slot(Slot::Unknown);
+        self.push_slot(Slot::opaque());
     }
 
     /// `call`: a known function pops its parameters and pushes its returns;
@@ -1635,16 +2033,21 @@ impl Checker {
         match target {
             Expr::Variable { name } => match self.resolve_function(name) {
                 Some(summary) => {
-                    let (is_unsafe, params, returns) =
-                        (summary.is_unsafe, summary.param_count, summary.return_count);
+                    let (is_unsafe, params, returns) = (
+                        summary.is_unsafe,
+                        summary.params.clone(),
+                        summary.returns.clone(),
+                    );
                     // PLAN 3.5.1: calling an `unsafe function` needs an
                     // unsafe context.
                     if is_unsafe {
                         self.require_unsafe(span, &format!("call to unsafe function '{name}'"));
                     }
-                    self.pop_n(params);
-                    for _ in 0..returns {
-                        self.push_slot(Slot::Unknown);
+                    // PLAN 6.4: operand count and operand types (E312).
+                    self.check_call_operands(name, &params, span);
+                    self.pop_n(params.len());
+                    for ret in returns {
+                        self.push_slot(Slot::Unknown(ret));
                     }
                 }
                 None => self.unknown_call(),
@@ -1674,8 +2077,11 @@ impl Checker {
                         if let Some(struct_name) = &var.struct_name {
                             let fq = format!("{struct_name}::{member}");
                             if let Some(summary) = self.decls.function(&fq) {
-                                let (is_unsafe, params, returns) =
-                                    (summary.is_unsafe, summary.param_count, summary.return_count);
+                                let (is_unsafe, params, returns) = (
+                                    summary.is_unsafe,
+                                    summary.params.clone(),
+                                    summary.returns.clone(),
+                                );
                                 // PLAN 3.5.1: calling an `unsafe function`
                                 // needs an unsafe context.
                                 if is_unsafe {
@@ -1684,9 +2090,12 @@ impl Checker {
                                         &format!("call to unsafe function '{fq}'"),
                                     );
                                 }
-                                self.pop_n(params);
-                                for _ in 0..returns {
-                                    self.push_slot(Slot::Unknown);
+                                // PLAN 6.4: operand count and operand types
+                                // (E312); the receiver is operand 1.
+                                self.check_call_operands(&fq, &params, span);
+                                self.pop_n(params.len());
+                                for ret in returns {
+                                    self.push_slot(Slot::Unknown(ret));
                                 }
                                 return;
                             }
@@ -1696,6 +2105,58 @@ impl Checker {
                 self.unknown_call();
             }
             _ => self.unknown_call(),
+        }
+    }
+
+    /// PLAN 6.4: for functions visible to the checker, reject a call with
+    /// too few operands for the parameter count and type-check the
+    /// operands against the parameter types (the PLAN 6.2 coercion
+    /// matrix). The count check needs a reliable stack height: an opaque
+    /// call earlier in the region makes the height uncomparable (the
+    /// PLAN 5.5 flag), so it is skipped there. Operand types are checked
+    /// whenever the operand slot's type is known; opaque operands skip
+    /// individually.
+    fn check_call_operands(&mut self, name: &str, params: &[Ty], span: Span) {
+        let n = params.len();
+        if !self.height_opaque && self.stack.len() < n {
+            self.emit(
+                Diagnostic::error(
+                    CODE_CALL_TYPE_MISMATCH,
+                    format!(
+                        "call to '{name}' needs {n} operand(s), but the stack has {}",
+                        self.stack.len()
+                    ),
+                )
+                .with_primary(span, "")
+                .with_help("push the operand(s) before the call word"),
+            );
+            return;
+        }
+        let Some(base) = self.stack.len().checked_sub(n) else {
+            return;
+        };
+        for (i, param) in params.iter().enumerate() {
+            let Some(slot) = self.stack.get(base + i) else {
+                continue;
+            };
+            if !self.binds_to(slot.ty(), param) {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_CALL_TYPE_MISMATCH,
+                        format!(
+                            "operand {} of the call to '{name}' is {}, but the parameter is {}",
+                            i + 1,
+                            ty_label(slot.ty()),
+                            ty_label(param)
+                        ),
+                    )
+                    .with_primary(span, "")
+                    .with_help(
+                        "operands coerce like bindings: an integer widens to an integer \\\
+                         parameter; every other mismatch is rejected",
+                    ),
+                );
+            }
         }
     }
 
@@ -1743,46 +2204,57 @@ impl Checker {
     }
 
     /// `typeof` releases the borrow of a borrowed heap value and pushes the
-    /// type value.
+    /// type value (PLAN 6.1: a type value is its own family, comparable
+    /// with other type values).
     fn apply_typeof(&mut self) {
         self.pop_releasing();
-        self.push_slot(Slot::Copy);
+        self.push_slot(Slot::Copy(Ty::TypeValue));
     }
 
     /// The `borrow` word: an owned value becomes a borrow of itself; an
     /// existing borrow moves (its liveness continues); a copy stays a copy.
+    /// The borrowed value's static type is unchanged (PLAN 6.1).
     fn apply_borrow(&mut self, span: Span) {
         match self.stack.pop() {
-            Some(Slot::Owned(temp)) => {
-                let slot = self.create_borrow(BorrowKey::Temp(temp), span);
+            Some(Slot::Owned(temp, ty)) => {
+                let slot = self.create_borrow(BorrowKey::Temp(temp), ty, span);
                 self.push_slot(slot);
             }
-            Some(slot @ Slot::Borrow(_)) => self.push_slot(slot),
-            Some(slot @ (Slot::Copy | Slot::Pointer)) => self.push_slot(slot),
-            Some(slot @ Slot::Unknown) => self.push_slot(slot),
-            None => self.push_slot(Slot::Unknown),
+            Some(slot) => self.push_slot(slot),
+            None => self.push_slot(Slot::opaque()),
         }
     }
 
     /// Pop two operands and push the binary result. `+` / `-` over a
     /// pointer is pointer arithmetic (PLAN 3.5.2): it needs an unsafe
-    /// context and the result stays a pointer.
+    /// context and the result stays a pointer. PLAN 6.3: the operands
+    /// must match the operator's families (E311) and the result carries
+    /// the operator's result type.
     fn apply_bin(&mut self, op: BinOp, span: Span) {
         let rhs = self.stack.get(self.stack.len().saturating_sub(1)).cloned();
         let lhs = self.stack.get(self.stack.len().saturating_sub(2)).cloned();
         let pointer_arith = matches!(op, BinOp::Plus | BinOp::Minus)
-            && (matches!(lhs, Some(Slot::Pointer)) || matches!(rhs, Some(Slot::Pointer)));
+            && (matches!(lhs, Some(Slot::Pointer(_))) || matches!(rhs, Some(Slot::Pointer(_))));
         if pointer_arith {
             self.require_unsafe(span, "pointer arithmetic");
         }
+        // PLAN 6.3: operand families (E311). A pointer operand's type is
+        // opaque, so pointer arithmetic skips the check like any other
+        // opaque operand.
+        self.check_bin_operands(op, lhs.as_ref(), rhs.as_ref(), span);
         self.pop_n(2);
         if op == BinOp::Concat {
             let temp = self.fresh_temp();
-            self.push_slot(Slot::Owned(temp));
+            self.push_slot(Slot::Owned(temp, Ty::Prim(16)));
         } else if pointer_arith {
-            self.push_slot(Slot::Pointer);
+            let ty = match (&lhs, &rhs) {
+                (Some(Slot::Pointer(ty)), _) => ty.clone(),
+                (_, Some(Slot::Pointer(ty))) => ty.clone(),
+                _ => Ty::Opaque,
+            };
+            self.push_slot(Slot::Pointer(ty));
         } else {
-            self.push_slot(Slot::Copy);
+            self.push_slot(Slot::Copy(bin_result_ty(op, lhs.as_ref(), rhs.as_ref())));
         }
     }
 
@@ -1815,6 +2287,60 @@ impl Checker {
         );
     }
 
+    /// PLAN 6.3: operator operand families (E311). Arithmetic requires
+    /// numeric operands, `//` `%` `^` and the shifts require integers,
+    /// `and` / `or` / `xor` accept bools or integers (the same words are
+    /// logical on bools and bitwise on integers, and the runtime mixes
+    /// the two for `and` / `or` / `xor`), `~` requires strings, and
+    /// comparisons require matching families (the runtime promotes
+    /// mixed integers and floats). An operand whose type is opaque
+    /// skips the check.
+    fn check_bin_operands(
+        &mut self,
+        op: BinOp,
+        lhs: Option<&Slot>,
+        rhs: Option<&Slot>,
+        span: Span,
+    ) {
+        let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+            return;
+        };
+        if matches!(lhs.ty(), Ty::Opaque) || matches!(rhs.ty(), Ty::Opaque) {
+            return;
+        }
+        let ok = match op {
+            BinOp::Concat => lhs.ty().is_string() && rhs.ty().is_string(),
+            BinOp::Eq | BinOp::Ne | BinOp::Gt | BinOp::Gte | BinOp::Lt | BinOp::Lte => {
+                comparable(lhs.ty(), rhs.ty())
+            }
+            BinOp::Plus | BinOp::Minus | BinOp::Mul | BinOp::Div => {
+                lhs.ty().is_numeric() && rhs.ty().is_numeric()
+            }
+            BinOp::Fdiv | BinOp::Mod | BinOp::Pow | BinOp::Lshift | BinOp::Rshift => {
+                lhs.ty().is_int() && rhs.ty().is_int()
+            }
+            BinOp::And | BinOp::Or | BinOp::Xor => {
+                (lhs.ty().is_int() || lhs.ty().is_bool())
+                    && (rhs.ty().is_int() || rhs.ty().is_bool())
+            }
+        };
+        if !ok {
+            self.emit(
+                Diagnostic::error(
+                    CODE_OPERATOR_TYPE_MISMATCH,
+                    format!(
+                        "'{}' cannot be applied to {} and {}",
+                        bin_op_label(op),
+                        ty_label(lhs.ty()),
+                        ty_label(rhs.ty())
+                    ),
+                )
+                .with_primary(span, "")
+                .with_help(bin_op_help(op)),
+            );
+        }
+    }
+
     /// Stack manipulation words.
     fn check_stack_op(&mut self, op: StackOp, span: Span) {
         match op {
@@ -1824,26 +2350,25 @@ impl Checker {
                 // the PLAN 3.1 modeling (the runtime clones the handle
                 // unowned) so the rest of the walk sees the stack it would
                 // see without the rule.
-                Some(Slot::Owned(temp)) => {
+                Some(Slot::Owned(temp, ty)) => {
                     self.emit_dup_non_copy(span);
                     let key = BorrowKey::Temp(temp);
                     if !self.is_live(&key) {
                         self.live.insert(key.clone(), self.scopes.len() - 1);
                     }
-                    self.push_slot(Slot::Borrow(key));
+                    self.push_slot(Slot::Borrow(key, ty));
                 }
                 // A borrow is always of a heap value (borrows of copy
                 // values stay copies), so this is also a non-copy `dup`.
                 // Push the borrow without re-registering it: the original
                 // borrow is already live, and a second E375 here would
                 // cascade.
-                Some(Slot::Borrow(key)) => {
+                Some(Slot::Borrow(key, ty)) => {
                     self.emit_dup_non_copy(span);
-                    self.push_slot(Slot::Borrow(key));
+                    self.push_slot(Slot::Borrow(key, ty));
                 }
-                Some(slot @ (Slot::Copy | Slot::Pointer)) => self.push_slot(slot),
-                Some(slot @ Slot::Unknown) => self.push_slot(slot),
-                None => self.push_slot(Slot::Unknown),
+                Some(slot) => self.push_slot(slot),
+                None => self.push_slot(Slot::opaque()),
             },
             StackOp::Swap => {
                 let n = self.stack.len();
@@ -1868,7 +2393,7 @@ impl Checker {
             StackOp::Pop => {
                 // PLAN 3.1.2: popping an owner while a borrow of its value
                 // is live leaves a dangling reference.
-                if let Some(Slot::Owned(temp)) = self.pop_releasing() {
+                if let Some(Slot::Owned(temp, _)) = self.pop_releasing() {
                     let key = BorrowKey::Temp(temp);
                     if self.is_live(&key) {
                         self.emit(
@@ -1888,7 +2413,7 @@ impl Checker {
                 // released by the same drop).
                 while let Some(slot) = self.stack.pop() {
                     match slot {
-                        Slot::Owned(temp) => {
+                        Slot::Owned(temp, _) => {
                             let key = BorrowKey::Temp(temp);
                             if self.held_by_reference(&key) {
                                 self.emit(
@@ -1901,7 +2426,7 @@ impl Checker {
                                 self.live.remove(&key);
                             }
                         }
-                        Slot::Borrow(key) => {
+                        Slot::Borrow(key, _) => {
                             self.live.remove(&key);
                         }
                         _ => {}
@@ -1954,5 +2479,104 @@ fn union_member_label(t: &Type) -> String {
         TypeKind::Named(n) => n.clone(),
         TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
         _ => "member".to_string(),
+    }
+}
+
+/// PLAN 6.3: whether two comparison operands are of matching families:
+/// equal types, two numbers (the runtime promotes mixed integers and
+/// floats), two strings, two bools, or two type values.
+fn comparable(a: &Ty, b: &Ty) -> bool {
+    a == b
+        || (a.is_numeric() && b.is_numeric())
+        || (a.is_string() && b.is_string())
+        || (a.is_bool() && b.is_bool())
+        || (matches!(a, Ty::TypeValue) && matches!(b, Ty::TypeValue))
+}
+
+/// PLAN 6.1: the result type of one binary operator. Comparisons push
+/// bool; `/` (true division) always yields a float, mirroring the
+/// runtime; `+` `-` `*` yield a float when either operand is a float and
+/// an integer otherwise; `and` / `or` / `xor` yield bool only when both
+/// operands are bools (the runtime mixes bools into integers otherwise).
+/// An opaque operand leaves the result opaque: its width at runtime is
+/// not known.
+fn bin_result_ty(op: BinOp, lhs: Option<&Slot>, rhs: Option<&Slot>) -> Ty {
+    let lhs = lhs.map(Slot::ty);
+    let rhs = rhs.map(Slot::ty);
+    let opaque = |lhs: Option<&Ty>, rhs: Option<&Ty>| {
+        matches!(lhs, Some(Ty::Opaque)) || matches!(rhs, Some(Ty::Opaque))
+    };
+    match op {
+        BinOp::Eq | BinOp::Ne | BinOp::Gt | BinOp::Gte | BinOp::Lt | BinOp::Lte => Ty::Prim(0),
+        BinOp::Div => Ty::Prim(14),
+        BinOp::Plus | BinOp::Minus | BinOp::Mul => {
+            if opaque(lhs, rhs) {
+                Ty::Opaque
+            } else if lhs.is_some_and(|t| t.is_float()) || rhs.is_some_and(|t| t.is_float()) {
+                Ty::Prim(14)
+            } else {
+                Ty::Prim(4)
+            }
+        }
+        BinOp::And | BinOp::Or | BinOp::Xor => {
+            if opaque(lhs, rhs) {
+                Ty::Opaque
+            } else if lhs.is_some_and(|t| t.is_bool()) && rhs.is_some_and(|t| t.is_bool()) {
+                Ty::Prim(0)
+            } else {
+                Ty::Prim(4)
+            }
+        }
+        _ => {
+            if opaque(lhs, rhs) {
+                Ty::Opaque
+            } else {
+                Ty::Prim(4)
+            }
+        }
+    }
+}
+
+/// Source spelling of a binary operator, for diagnostics.
+fn bin_op_label(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Plus => "+",
+        BinOp::Minus => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Fdiv => "//",
+        BinOp::Mod => "%",
+        BinOp::Pow => "^",
+        BinOp::Concat => "~",
+        BinOp::Eq => "==",
+        BinOp::Ne => "!=",
+        BinOp::Gt => ">",
+        BinOp::Gte => ">=",
+        BinOp::Lt => "<",
+        BinOp::Lte => "<=",
+        BinOp::And => "and",
+        BinOp::Or => "or",
+        BinOp::Xor => "xor",
+        BinOp::Lshift => "lshift",
+        BinOp::Rshift => "rshift",
+    }
+}
+
+/// One-line guidance for the `E311` message of one operator.
+fn bin_op_help(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Plus | BinOp::Minus | BinOp::Mul | BinOp::Div => {
+            "arithmetic requires numeric operands"
+        }
+        BinOp::Fdiv | BinOp::Mod | BinOp::Pow | BinOp::Lshift | BinOp::Rshift => {
+            "'//', '%', '^', 'lshift', and 'rshift' require integer operands"
+        }
+        BinOp::And | BinOp::Or | BinOp::Xor => {
+            "'and', 'or', and 'xor' require bool or integer operands"
+        }
+        BinOp::Concat => "'~' requires string operands",
+        BinOp::Eq | BinOp::Ne | BinOp::Gt | BinOp::Gte | BinOp::Lt | BinOp::Lte => {
+            "comparisons require operands of matching families"
+        }
     }
 }

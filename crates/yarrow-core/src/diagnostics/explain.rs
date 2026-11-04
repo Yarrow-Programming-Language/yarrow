@@ -107,6 +107,52 @@ calls to functions visible in the unit; results the checker cannot see \
 (module functions) keep the runtime check.",
     },
     ExplainEntry {
+        code: "E310",
+        title: "binding type mismatch",
+        body: "\
+A declaration binds the value on the stack to its declared type, and \
+`set` reassigns a binding. Implicit coercion is allowed only inside the \
+coercion matrix: a value binds when the kinds are equal; an integer \
+value binds to any integer type (widening, and a literal's value is \
+range-checked); a float value binds to any float type; a named union \
+accepts any of its member types. Every other combination (bool to \
+integer, float to integer, string to anything else, one struct to \
+another) is rejected. Convert the value or change the declared type.",
+    },
+    ExplainEntry {
+        code: "E311",
+        title: "operator operand type mismatch",
+        body: "\
+Operators require operand families they can work on: arithmetic \
+(`+ - * /`) requires numeric operands; `//`, `%`, `^`, `lshift`, and \
+`rshift` require integers; `and`, `or`, `xor`, and `not` require bools \
+or integers (the same words are logical on bools and bitwise on \
+integers); `~` requires strings; comparisons require matching \
+families. Values whose type the checker cannot see (module calls) skip \
+the check. Convert an operand, or pick the operator for its family.",
+    },
+    ExplainEntry {
+        code: "E312",
+        title: "call operand count or type mismatch",
+        body: "\
+A call to a function visible in the unit needs one operand per \
+parameter, and each operand must coerce to its parameter's type (the \
+same matrix as bindings: integers widen to integer parameters). Push \
+the missing operand(s) before the call word, or convert the value. \
+Module functions are opaque to the checker; their arguments are \
+checked at runtime.",
+    },
+    ExplainEntry {
+        code: "E313",
+        title: "condition must be bool",
+        body: "\
+`if` conditions, `for` sources, and `match` case conditions must be \
+bool. Comparisons push bool; a bare integer or string is not a \
+condition. A `for` source may also be an array or list to iterate. \
+Compare or convert the value first; the runtime rejects non-bool \
+match conditions the same way.",
+    },
+    ExplainEntry {
         code: "E334",
         title: "integer-only remainder and power",
         body: "\
