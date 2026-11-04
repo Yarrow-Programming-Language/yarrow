@@ -257,21 +257,41 @@ whose error side is the `error` primitive or a name found in
 `|i64 error.Error|` without requiring `std.error`), the function silently
 behaves as non-fallible and `unwrap` degenerates to identity.
 
-- [ ] 4.1 Centralize the fallibility predicate in one function used by both
+Recorded implementation decisions (Stage 4):
+
+- The shared predicate lives in `src/signature.rs`
+  (`classify_signature`); each pass supplies the error-type resolver
+  appropriate to what it can see.
+- The checker sees main-unit declarations only, so a bare error-side name
+  resolves when the unit declares it as an error type, and a
+  module-qualified path (`error.Error`) is opaque to the checker: the
+  alias may come from a hoisted module require the checker cannot see
+  (15_fs.yar names `error.Error` while only std.fs requires std.error).
+  The interpreter validates every registered unit once all modules and
+  alias bindings are registered, which covers module units and backstops
+  the main unit's module-qualified references.
+- A bare name is unit-local: module error types are referenced through
+  their alias (`error.Error`), the grammar's own convention. The old
+  `n == "Error"` fallback in `fallible_payload` is gone.
+- A two-member union return with no resolvable error side at all
+  (`|i64 i64|`) is also `E386`: anonymous unions exist only as the
+  fallible form.
+
+- [x] 4.1 Centralize the fallibility predicate in one function used by both
   the interpreter (`fallible_payload`) and the checker (5.2): a return union
   with exactly two members is fallible when one side is the `error`
   primitive or a named type that resolves to a registered error type,
   including dotted paths such as `error.Error` resolved through the
   module-alias table.
-- [ ] 4.2 When a two-member return union names an error side that resolves
+- [x] 4.2 When a two-member return union names an error side that resolves
   to no registered error type, reject the declaration with `E386` (unknown
   error type in fallible signature) instead of silently treating the
   function as non-fallible. Anonymous unions are only supported as this
   fallible form, so every two-member union return must resolve.
-- [ ] 4.3 Add `E386` to the explain catalog: require the module that
+- [x] 4.3 Add `E386` to the explain catalog: require the module that
   declares the error type (for example `"std.error" error require`) or
   declare the error type in this unit.
-- [ ] 4.4 The checker emits `E386` for main-unit declarations it can see,
+- [x] 4.4 The checker emits `E386` for main-unit declarations it can see,
   and the interpreter emits it at registration for module units; both use
   the same predicate.
 

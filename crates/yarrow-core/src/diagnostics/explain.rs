@@ -144,6 +144,16 @@ exports do not collide. The diagnostic names the unit that declared the \
 type first and the unit that redeclares it.",
     },
     ExplainEntry {
+        code: "E386",
+        title: "unknown error type in fallible signature",
+        body: "\
+A function declared `with |payload error|` names an error side that resolves \
+to no registered error type, and an anonymous two-member union return is \
+only supported as this fallible form. Require the module that declares the \
+error type (for example `\"std.error\" error require`) or declare the error \
+type in this unit.",
+    },
+    ExplainEntry {
         code: "E363",
         title: "invalid literal or enum carrier",
         body: "\

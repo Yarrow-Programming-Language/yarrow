@@ -7,6 +7,7 @@ pub mod parser;
 pub mod result;
 pub mod runtime;
 pub mod session;
+pub mod signature;
 pub mod tokenizer;
 
 pub use checker::{Checker, Declarations, FuncSummary, check_program};

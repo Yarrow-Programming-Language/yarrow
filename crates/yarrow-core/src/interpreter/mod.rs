@@ -62,6 +62,7 @@ use crate::runtime::{
     self, FieldDesc, KIND_ENUM, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT, KIND_UNION,
     UNION_PAYLOAD_OFFSET, UNION_TAG_OFFSET, free_value,
 };
+use crate::signature::{Signature, classify_signature};
 use crate::tokenizer::Tokenizer;
 
 /// Kind tag used for fallible error envelopes on the interpreter stack.
@@ -450,6 +451,7 @@ impl Interpreter {
         }
         self.resolve_error_injects()?;
         self.register_module_bindings()?;
+        self.validate_error_signatures()?;
         Ok(())
     }
 
@@ -465,7 +467,10 @@ impl Interpreter {
                 "E360",
             )
         })?;
-        let fallible = fallible_payload(&entry.function.returns, &self.error_type_ids);
+        let fallible = self.fallible_payload(
+            &entry.function.returns,
+            &require_aliases(&entry.local_requires),
+        );
         let mut stack = Vec::new();
         self.call_function(&entry, &mut stack)?;
         if fallible.is_some() {
@@ -1250,7 +1255,6 @@ impl Interpreter {
                 self.deep_copy_arg(arg);
             }
         }
-        let error_payload = fallible_payload(&entry.function.returns, &self.error_type_ids);
         // Function-scoped `require` bindings (PLAN 2.6.1): alias and plain
         // names from this function's own requires shadow the global ones.
         let mut local_aliases = HashMap::new();
@@ -1275,6 +1279,9 @@ impl Interpreter {
                 }
             }
         }
+        // PLAN 4.1: the signature resolver consults the function's own
+        // aliases before the global ones.
+        let error_payload = self.fallible_payload(&entry.function.returns, &local_aliases);
         let mut frame = Frame {
             locals: HashMap::new(),
             loops: Vec::new(),
@@ -5112,28 +5119,91 @@ fn write_bits_at(base: u64, offset: i32, size: u32, bits: u64) {
     }
 }
 
-fn fallible_payload(returns: &[Type], error_type_ids: &HashMap<String, u32>) -> Option<MemberTy> {
-    if returns.len() != 1 {
-        return None;
-    }
-    let TypeKind::Union(members) = &returns[0].kind else {
-        return None;
-    };
-    if members.len() != 2 {
-        return None;
-    }
-    let is_err = |t: &Type| match &t.kind {
-        TypeKind::Primitive(Primitive::Error) => true,
-        TypeKind::Named(n) => {
-            let name = n.rsplit('.').next().unwrap_or(n);
-            error_type_ids.contains_key(name) || error_type_ids.contains_key(n) || n == "Error"
+/// Alias -> module path for a function's own `require` statements. The
+/// signature resolver consults these before the global aliases (PLAN 4.1).
+fn require_aliases(reqs: &[LocalRequire]) -> HashMap<String, String> {
+    reqs.iter()
+        .filter_map(|r| r.alias.clone().map(|a| (a, r.path.clone())))
+        .collect()
+}
+
+impl Interpreter {
+    /// PLAN 4.1: the payload member of a fallible `with |payload error|`
+    /// signature, classified by the shared predicate. `None` when the
+    /// function cannot fail.
+    fn fallible_payload(
+        &self,
+        returns: &[Type],
+        local_aliases: &HashMap<String, String>,
+    ) -> Option<MemberTy> {
+        match classify_signature(returns, &|n| self.resolves_error_type(n, local_aliases)) {
+            Signature::Fallible { payload } => Some(ast_member_ty(payload)),
+            _ => None,
         }
-        _ => false,
-    };
-    match (is_err(&members[0]), is_err(&members[1])) {
-        (false, true) => Some(ast_member_ty(&members[0])),
-        (true, false) => Some(ast_member_ty(&members[1])),
-        _ => None,
+    }
+
+    /// PLAN 4.1: a named error side resolves to a registered error type.
+    /// A bare name resolves through the global error-type registry; a
+    /// dotted path `alias.Member` resolves through the module-alias table
+    /// (the function's own aliases first, then the global ones), and the
+    /// member must be an error type declared by that module.
+    fn resolves_error_type(&self, name: &str, local_aliases: &HashMap<String, String>) -> bool {
+        if self.error_type_ids.contains_key(name) {
+            return true;
+        }
+        let Some((alias, member)) = name.rsplit_once('.') else {
+            return false;
+        };
+        let Some(path) = local_aliases
+            .get(alias)
+            .or_else(|| self.aliases.get(alias))
+            .cloned()
+        else {
+            return false;
+        };
+        self.error_type_ids.contains_key(member)
+            && self
+                .type_units
+                .get(&(TypeCategory::Error, member.to_string()))
+                == Some(&format!("module '{path}'"))
+    }
+
+    /// PLAN 4.2 / 4.4: every two-member union return must resolve its
+    /// error side. Runs once after all units register and the alias
+    /// bindings are built, so it sees the same tables the runtime
+    /// resolver does. The checker covers main-unit declarations with
+    /// unit-visible names; this pass also covers module units and the
+    /// module-qualified references the checker cannot see through.
+    fn validate_error_signatures(&self) -> IResult<()> {
+        for entry in self.funcs.values() {
+            let aliases = require_aliases(&entry.local_requires);
+            let signature = classify_signature(&entry.function.returns, &|n| {
+                self.resolves_error_type(n, &aliases)
+            });
+            if let Signature::UnknownError { name } = signature {
+                let (span, owner) = match &entry.module {
+                    None => (
+                        entry
+                            .function
+                            .returns
+                            .first()
+                            .map(|t| Span::from_location(t.location))
+                            .unwrap_or_default(),
+                        format!("function '{}'", entry.function.name),
+                    ),
+                    Some(path) => (
+                        Span::default(),
+                        format!("function '{}' of module '{path}'", entry.function.name),
+                    ),
+                };
+                return Err(InterpretError::new(
+                    format!("unknown error type '{name}' in the signature of {owner}"),
+                    span,
+                    "E386",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

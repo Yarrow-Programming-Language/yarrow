@@ -63,6 +63,7 @@ use crate::parser::ast::{
     BinOp, EnumDecl, ErrorDecl, Expr, Function, MatchCaseKind, Mutability, Primitive, Program,
     StackOp, Stmt, StmtKind, StructDecl, Type, TypeKind, UnionDecl,
 };
+use crate::signature::{Signature, classify_signature};
 
 /// Diagnostic code reserved for the single-borrow rule (PLAN 3.1.1).
 const CODE_SECOND_BORROW: &str = "E375";
@@ -80,6 +81,9 @@ const CODE_STATIC_NON_CONST: &str = "E377";
 /// Diagnostic code reserved for an unsafe operation outside an unsafe
 /// context (PLAN 3.5).
 const CODE_UNSAFE_OUTSIDE: &str = "E370";
+/// Diagnostic code reserved for an unresolvable error side in a fallible
+/// signature (PLAN 4.2).
+const CODE_UNKNOWN_ERROR_TYPE: &str = "E386";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -584,6 +588,7 @@ impl Checker {
     fn check_function(&mut self, f: &Function, fq: &str, is_method: bool) {
         let saved = self.save_machine();
         self.caller_fq = fq.to_string();
+        self.check_return_signature(f);
 
         for param in &f.params {
             let slot = match &param.ty.kind {
@@ -625,6 +630,44 @@ impl Checker {
             self.unsafe_depth -= 1;
         }
         self.restore_machine(saved);
+    }
+
+    /// PLAN 4.2 / 4.4: a two-member union return is only supported as the
+    /// fallible form, so its error side must resolve. The checker sees
+    /// main-unit declarations only: a bare name resolves when this unit
+    /// declares it as an error type, and a module-qualified path is
+    /// resolved by the interpreter after module loading.
+    fn check_return_signature(&mut self, f: &Function) {
+        let signature = classify_signature(&f.returns, &|n| self.resolves_error_type(n));
+        let Signature::UnknownError { name } = signature else {
+            return;
+        };
+        let span = f
+            .returns
+            .first()
+            .map(|t| Span::from_location(t.location))
+            .unwrap_or_default();
+        self.emit(
+            Diagnostic::error(
+                CODE_UNKNOWN_ERROR_TYPE,
+                format!("unknown error type '{name}' in the signature of '{}'", f.name),
+            )
+            .with_primary(span, "")
+            .with_help(
+                "require the module that declares the error type, or declare the error type in this unit",
+            ),
+        );
+    }
+
+    /// PLAN 4.1: error-side resolution visible to the checker. A bare name
+    /// resolves when this unit declares it as an error type; a dotted path
+    /// names a module type, and module contents are not visible here, so
+    /// it resolves opaquely (the interpreter validates it after loading).
+    fn resolves_error_type(&self, name: &str) -> bool {
+        match name.rsplit_once('.') {
+            Some(_) => true,
+            None => self.decls.is_error_type(name),
+        }
     }
 
     /// Snapshot everything the borrow machine mutates across a function.
