@@ -233,6 +233,9 @@ struct FieldInfo {
     kind: u64,
     offset: i32,
     size: u32,
+    /// True when the field is declared `public` (PLAN 5.4). Default
+    /// visibility is private.
+    public: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +243,9 @@ struct StructInfo {
     name: String,
     fields: Vec<FieldInfo>,
     size: u32,
+    /// Module path of the unit that declared the struct; `None` is the main
+    /// unit (PLAN 5.4). Backs the field-visibility gate.
+    module: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -564,7 +570,7 @@ impl Interpreter {
         let unit = Self::unit_label(module.as_deref());
         for item in &program.items {
             match &item.kind {
-                StmtKind::Struct(d) => self.register_struct(&unit, d)?,
+                StmtKind::Struct(d) => self.register_struct(module.as_deref(), d)?,
                 StmtKind::Enum(d) => self.register_enum(&unit, d)?,
                 StmtKind::Union(d) => self.register_union(&unit, d)?,
                 StmtKind::Error(d) => self.register_error(&unit, d)?,
@@ -616,8 +622,9 @@ impl Interpreter {
         Ok(())
     }
 
-    fn register_struct(&mut self, unit: &str, d: &StructDecl) -> IResult<()> {
-        self.check_type_duplicate(TypeCategory::Struct, &d.name, unit)?;
+    fn register_struct(&mut self, module: Option<&str>, d: &StructDecl) -> IResult<()> {
+        let unit = Self::unit_label(module);
+        self.check_type_duplicate(TypeCategory::Struct, &d.name, &unit)?;
         let id = self.structs.len() as u32;
         self.struct_ids.insert(d.name.clone(), id);
         let mut fields = Vec::new();
@@ -632,6 +639,7 @@ impl Interpreter {
                 kind,
                 offset: size as i32,
                 size: fsize,
+                public: matches!(f.visibility, Some(Visibility::Public)),
             });
             size += fsize;
         }
@@ -654,6 +662,7 @@ impl Interpreter {
             name: d.name.clone(),
             fields,
             size,
+            module: module.map(str::to_string),
         });
         Ok(())
     }
@@ -1854,10 +1863,17 @@ impl Interpreter {
                                 return Err(e);
                             }
                         };
-                        let field = self
-                            .structs
-                            .get(sid as usize)
-                            .and_then(|s| s.fields.iter().find(|f| f.name == *member))
+                        let info = self.structs.get(sid as usize).ok_or_else(|| {
+                            InterpretError::new(
+                                format!("struct has no field '{member}'"),
+                                stmt.span,
+                                "E340",
+                            )
+                        })?;
+                        let field = info
+                            .fields
+                            .iter()
+                            .find(|f| f.name == *member)
                             .cloned()
                             .ok_or_else(|| {
                                 InterpretError::new(
@@ -1866,6 +1882,14 @@ impl Interpreter {
                                     "E340",
                                 )
                             })?;
+                        // PLAN 5.4.2: private fields are set only from the
+                        // declaring unit.
+                        if let Err(e) = self.check_field_visibility(info, &field, module, stmt.span)
+                        {
+                            base_slot.drop_owned();
+                            slot.drop_owned();
+                            return Err(e);
+                        }
                         // Free previous union payload before overwrite (matches JIT).
                         if (field.kind & 0xff) == KIND_UNION {
                             let old_bits = read_bits_at(handle, field.offset, field.size);
@@ -2722,14 +2746,23 @@ impl Interpreter {
                         return Err(e);
                     }
                 };
-                let field = self
-                    .structs
-                    .get(sid as usize)
-                    .and_then(|s| s.fields.iter().find(|f| f.name == *member))
+                let info = self.structs.get(sid as usize).ok_or_else(|| {
+                    InterpretError::new(format!("struct has no field '{member}'"), span, "E340")
+                })?;
+                let field = info
+                    .fields
+                    .iter()
+                    .find(|f| f.name == *member)
                     .cloned()
                     .ok_or_else(|| {
                         InterpretError::new(format!("struct has no field '{member}'"), span, "E340")
                     })?;
+                // PLAN 5.4.2: private fields are readable only from the
+                // declaring unit.
+                if let Err(e) = self.check_field_visibility(info, &field, module, span) {
+                    base_slot.drop_owned();
+                    return Err(e);
+                }
                 let bits = read_bits_at(handle, field.offset, field.size);
                 base_slot.drop_owned();
                 stack.push(self.bits_to_slot_kind(bits, field.kind, false));
@@ -2985,6 +3018,31 @@ impl Interpreter {
         addr_slot.drop_owned();
         stack.push(self.bits_to_slot_kind(bits, pointee, false));
         Ok(())
+    }
+
+    /// Field-visibility gate (PLAN 5.4): a non-`public` field is only
+    /// accessible from the unit that declared the struct. Same-unit access
+    /// stays legal.
+    fn check_field_visibility(
+        &self,
+        info: &StructInfo,
+        field: &FieldInfo,
+        module: Option<&str>,
+        span: Span,
+    ) -> IResult<()> {
+        if field.public || info.module.as_deref() == module {
+            return Ok(());
+        }
+        Err(InterpretError::new(
+            format!(
+                "field '{}.{}' is private to {}",
+                info.name,
+                field.name,
+                Self::unit_label(info.module.as_deref()),
+            ),
+            span,
+            "E397",
+        ))
     }
 
     /// Address and struct id for field access/`set` on a heap struct or

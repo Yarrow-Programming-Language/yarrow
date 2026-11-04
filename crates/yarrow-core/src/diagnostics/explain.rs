@@ -184,6 +184,15 @@ error type (for example `\"std.error\" error require`) or declare the error \
 type in this unit.",
     },
     ExplainEntry {
+        code: "E397",
+        title: "private struct field accessed from another unit",
+        body: "\
+A struct field is private unless it is declared `public`, and a private \
+field is only accessible from the unit that declared the struct. Mark the \
+field `public` in the declaring module, or move the access into that module \
+(for example a method on the struct).",
+    },
+    ExplainEntry {
         code: "E363",
         title: "invalid literal or enum carrier",
         body: "\

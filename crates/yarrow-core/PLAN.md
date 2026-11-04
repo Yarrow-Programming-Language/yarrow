@@ -372,13 +372,13 @@ the corpus unions still declare.
 The spec: "Default visibility is private for the type and each field;
 `public` exports." Field visibility is parsed today but never enforced.
 
-- [ ] 5.4.1 Extend `StructInfo` with each field's visibility and the unit
+- [x] 5.4.1 Extend `StructInfo` with each field's visibility and the unit
   (main or module path) that declared the struct.
-- [ ] 5.4.2 In field access and field `set` (`Expr::Member` evaluation and
+- [x] 5.4.2 In field access and field `set` (`Expr::Member` evaluation and
   the `StmtKind::Set` member target), reject access to a non-`public` field
   from a function whose unit differs from the declaring unit, with `E397`.
   Same-unit access to private fields stays legal.
-- [ ] 5.4.3 Add `E397` to the explain catalog: mark the field `public` in
+- [x] 5.4.3 Add `E397` to the explain catalog: mark the field `public` in
   the declaring module or move the access into that module.
 
 Acceptance: a module struct with a private field, accessed from the main
