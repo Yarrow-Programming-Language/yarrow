@@ -147,10 +147,17 @@ parameter leaves the caller's list unchanged.
 
 ### 2.4 `f16` float literals
 
-- [ ] 2.4.1 Extend `float_literal_kind` to return the `f16` kind code (12)
+Decision: no decimal like `3.14` is exactly representable in a binary float,
+so "smallest fitting" means the smallest type that preserves the literal at
+its written precision: rounding the value through the type and back to the
+literal's significant decimal digits reproduces the literal. `3.14` and
+`1.5` are `f16`; `6_329.5` is `f32` (the old `# f16` comment in the grammar
+tour was wrong: the nearest `f16` is 6328); `3.14159265358979` is `f64`.
+
+- [x] 2.4.1 Extend `float_literal_kind` to return the `f16` kind code (12)
   when the value is exactly representable as `f16`, then `f32`, then `f64`,
   matching the grammar's "floats take the smallest fitting float".
-- [ ] 2.4.2 Check every consumer of the kind code (arithmetic result kinds,
+- [x] 2.4.2 Check every consumer of the kind code (arithmetic result kinds,
   `typeof`, container element sizing in `kind_elem_size`) still behaves with
   kind 12; `kind_elem_size` already maps 12 to 2 bytes.
 

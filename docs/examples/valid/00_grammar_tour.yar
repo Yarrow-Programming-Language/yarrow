@@ -95,7 +95,7 @@ my_function private function do
 	0b100110 # u8 (38)
 	0xAB12 # u16 (43890)
 	3.14 # f16
-	6_329.5 # f16
+	6_329.5 # f32
 	"hello" # string
 	'\n' # rune (character)
 	true # bool

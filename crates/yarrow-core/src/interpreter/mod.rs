@@ -2077,7 +2077,7 @@ impl Interpreter {
             Expr::Float { value } => {
                 let f = decode_float_literal(value)
                     .map_err(|m| InterpretError::new(m, span, "E363"))?;
-                let kind = float_literal_kind(f);
+                let kind = float_literal_kind(value, f);
                 stack.push(Slot {
                     value: Value::Float(f),
                     kind,
@@ -4703,12 +4703,36 @@ fn int_literal_kind(n: i128) -> u64 {
     }
 }
 
-fn float_literal_kind(n: f64) -> u64 {
-    if n as f32 as f64 == n && n.is_finite() {
+/// Smallest float kind that preserves a float literal at the precision it is
+/// written with: `f16` (12), then `f32` (13), else `f64` (14). A literal fits
+/// a type when rounding the value through that type and back to the literal's
+/// significant decimal digits reproduces the literal's value, so `3.14` is
+/// `f16` while `3.14159265358979` is `f64`.
+fn float_literal_kind(lexeme: &str, n: f64) -> u64 {
+    if !n.is_finite() {
+        return 14;
+    }
+    let digits = significant_decimal_digits(lexeme);
+    let preserves = |narrowed: f64| -> bool {
+        format!("{:.*e}", digits.saturating_sub(1), narrowed)
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded == n)
+    };
+    if preserves(half::f16::from_f64(n).to_f64()) {
+        12
+    } else if preserves(n as f32 as f64) {
         13
     } else {
         14
     }
+}
+
+/// Significant decimal digits written in a float literal lexeme: mantissa
+/// digits with leading zeros skipped, exponent digits ignored.
+fn significant_decimal_digits(lexeme: &str) -> usize {
+    let mantissa = lexeme.split(['e', 'E']).next().unwrap_or(lexeme);
+    let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.trim_start_matches('0').len().max(1)
 }
 
 fn infer_value_kind(v: &Value) -> u64 {
