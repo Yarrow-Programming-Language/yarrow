@@ -282,8 +282,13 @@ pub struct Interpreter {
     error_type_ids: HashMap<String, u32>,
     /// Error type id → `(member_name, tag)`.
     error_types: Vec<(String, Vec<(String, u32)>)>,
-    /// Interned error tags (`AppError.NOT_FOUND` → 1..).
+    /// Interned error tags, keyed by member name so a tag is program-unique:
+    /// `MyErr.OUT_OF_MEMORY` and `error.OUT_OF_MEMORY` share one tag.
     error_tags: HashMap<String, u32>,
+    /// Error type id + inject path awaiting resolution. Module units register
+    /// after the main unit, so an inject that targets a module type (e.g.
+    /// `error.Error` from std.error) is resolved in `resolve_error_injects`.
+    pending_error_injects: Vec<(u32, String)>,
 }
 
 /// REPL-oriented wrapper around [`Interpreter`] (Stage 13b surface).
@@ -344,6 +349,7 @@ impl Interpreter {
             error_type_ids: HashMap::new(),
             error_types: Vec::new(),
             error_tags: HashMap::new(),
+            pending_error_injects: Vec::new(),
         }
     }
 
@@ -369,6 +375,7 @@ impl Interpreter {
         self.error_type_ids.clear();
         self.error_types.clear();
         self.error_tags.clear();
+        self.pending_error_injects.clear();
 
         let mut loaded = Vec::new();
         let mut loading = HashSet::new();
@@ -379,6 +386,7 @@ impl Interpreter {
         for m in &self.modules.clone() {
             self.register_unit(Some(m.path.clone()), &m.program)?;
         }
+        self.resolve_error_injects()?;
         self.register_module_bindings()?;
         Ok(())
     }
@@ -721,17 +729,97 @@ impl Interpreter {
         self.error_type_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
         for m in &d.members {
-            let key = format!("{}.{}", d.name, m);
-            let tag = self.intern_error_tag(&key);
+            let tag = self.intern_error_tag(m);
             members.push((m.clone(), tag));
         }
         self.error_types.push((d.name.clone(), members));
+        if let Some(inject) = &d.inject {
+            // Tags are interned by member name, so injected and local members
+            // that share a name already share a tag; the deferred pass only
+            // adds the injected names missing from the member list.
+            self.pending_error_injects.push((id, inject.clone()));
+        }
         Ok(())
     }
 
-    fn intern_error_tag(&mut self, key: &str) -> u32 {
+    fn intern_error_tag(&mut self, member: &str) -> u32 {
         let next = self.error_tags.len() as u32 + 1;
-        *self.error_tags.entry(key.to_string()).or_insert(next)
+        *self.error_tags.entry(member.to_string()).or_insert(next)
+    }
+
+    /// Resolve every deferred `inject` clause. Runs once, after all units are
+    /// registered, because module units register after the main unit.
+    fn resolve_error_injects(&mut self) -> IResult<()> {
+        let pending = std::mem::take(&mut self.pending_error_injects);
+        for (id, inject) in &pending {
+            self.apply_error_inject(*id, inject, &pending, &mut Vec::new())?;
+        }
+        Ok(())
+    }
+
+    /// Copy the members of the injected error type into type `id`. The
+    /// target's own pending inject resolves first so chains propagate;
+    /// `visiting` guards against inject cycles.
+    fn apply_error_inject(
+        &mut self,
+        id: u32,
+        inject: &str,
+        pending: &[(u32, String)],
+        visiting: &mut Vec<u32>,
+    ) -> IResult<()> {
+        if visiting.contains(&id) {
+            return Err(InterpretError::new(
+                format!(
+                    "cyclic error injection involving '{}'",
+                    self.error_type_name(id)
+                ),
+                Span::default(),
+                "E320",
+            ));
+        }
+        visiting.push(id);
+        let target = self.injected_error_id(inject).ok_or_else(|| {
+            InterpretError::new(
+                format!(
+                    "unknown injected error type '{inject}' for '{}'",
+                    self.error_type_name(id)
+                ),
+                Span::default(),
+                "E320",
+            )
+        })?;
+        if let Some((_, target_inject)) = pending.iter().find(|(tid, _)| *tid == target) {
+            let target_inject = target_inject.clone();
+            self.apply_error_inject(target, &target_inject, pending, visiting)?;
+        }
+        let members = self.error_types[target as usize].1.clone();
+        let (_, own) = &mut self.error_types[id as usize];
+        for (name, tag) in members {
+            if !own.iter().any(|(n, _)| *n == name) {
+                own.push((name, tag));
+            }
+        }
+        visiting.pop();
+        Ok(())
+    }
+
+    /// Resolve an inject path to a registered error type id. Error types
+    /// register globally by bare name, so a module-qualified path such as
+    /// `error.Error` falls back to its last segment.
+    fn injected_error_id(&self, inject: &str) -> Option<u32> {
+        if let Some(id) = self.error_type_ids.get(inject) {
+            return Some(*id);
+        }
+        inject
+            .rsplit_once('.')
+            .and_then(|(_, last)| self.error_type_ids.get(last))
+            .copied()
+    }
+
+    fn error_type_name(&self, id: u32) -> &str {
+        self.error_types
+            .get(id as usize)
+            .map_or("", |(name, _)| name)
     }
 
     fn register_implement(&mut self, module: Option<String>, imp: &Implement) -> IResult<()> {
@@ -2022,23 +2110,13 @@ impl Interpreter {
                 // `Color.GREEN` / `AppError.NOT_FOUND` / `error.TAG`
                 if let Expr::Variable { name } = base.as_ref() {
                     if name == "error" {
-                        let key = member.clone();
-                        let tag = self
-                            .error_tags
-                            .get(&key)
-                            .copied()
-                            .or_else(|| {
-                                self.error_types.iter().find_map(|(_, ms)| {
-                                    ms.iter().find(|(n, _)| n == member).map(|(_, t)| *t)
-                                })
-                            })
-                            .ok_or_else(|| {
-                                InterpretError::new(
-                                    format!("unknown error member '{member}'"),
-                                    span,
-                                    "E320",
-                                )
-                            })?;
+                        let tag = self.error_tags.get(member).copied().ok_or_else(|| {
+                            InterpretError::new(
+                                format!("unknown error member '{member}'"),
+                                span,
+                                "E320",
+                            )
+                        })?;
                         stack.push(Slot {
                             value: Value::Int(i64::from(tag)),
                             kind: KIND_ERROR,
@@ -4204,11 +4282,7 @@ impl Interpreter {
             return None;
         };
         if let Some(member) = path.strip_prefix("error.") {
-            return self.error_tags.get(member).copied().or_else(|| {
-                self.error_types
-                    .iter()
-                    .find_map(|(_, ms)| ms.iter().find(|(n, _)| n == member).map(|(_, t)| *t))
-            });
+            return self.error_tags.get(member).copied();
         }
         let (type_name, member) = path.rsplit_once('.')?;
         let id = self.error_type_ids.get(type_name)?;

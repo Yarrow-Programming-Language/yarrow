@@ -118,12 +118,12 @@ behaves as an `i32` enum.
 
 ### 2.2 Error type injection
 
-- [ ] 2.2.1 Honor `ErrorDecl.inject` in `register_error`: copy the members of
+- [x] 2.2.1 Honor `ErrorDecl.inject` in `register_error`: copy the members of
   the injected error type into the new type before interning local members.
-- [ ] 2.2.2 Keep tags program-unique (the `error_tags` interning already
+- [x] 2.2.2 Keep tags program-unique (the `error_tags` interning already
   guarantees this) so `MyErr.OUT_OF_MEMORY` and `error.OUT_OF_MEMORY` resolve
   to the same tag.
-- [ ] 2.2.3 Remove the accidental global-by-member-name fallback in the
+- [x] 2.2.3 Remove the accidental global-by-member-name fallback in the
   `error.MEMBER` lookup path once injection is real, so a typo cannot resolve
   through an unrelated error type.
 
