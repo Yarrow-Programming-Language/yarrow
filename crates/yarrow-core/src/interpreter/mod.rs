@@ -2567,6 +2567,304 @@ impl Interpreter {
                 });
                 Ok(())
             }
+            "std.list::get" => {
+                let index = self.pop(stack, span, "list.get")?;
+                let list = self.pop(stack, span, "list.get")?;
+                if (list.kind & 0xff) != KIND_LIST {
+                    list.drop_owned();
+                    index.drop_owned();
+                    return Err(InterpretError::new(
+                        "'list.get' requires a list",
+                        span,
+                        "E372",
+                    ));
+                }
+                let handle = match list.value {
+                    Value::Heap { handle, .. } => handle,
+                    other => {
+                        other.drop_owned();
+                        index.drop_owned();
+                        return Err(InterpretError::new(
+                            "'list.get' requires a list handle",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let idx = match index.value {
+                    Value::Int(n) => n,
+                    other => {
+                        other.drop_owned();
+                        list.drop_owned();
+                        return Err(InterpretError::new(
+                            "'list.get' requires an integer index",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let len = runtime::yarrow_list_len(handle) as i64;
+                if idx < 0 || idx >= len {
+                    list.drop_owned();
+                    return Err(InterpretError::new(
+                        format!("'list.get' index {idx} out of range (list length {len})"),
+                        span,
+                        "E372",
+                    ));
+                }
+                let elem_kind = list.kind >> 8;
+                let bits = runtime::yarrow_list_get(handle, idx as u64);
+                list.drop_owned();
+                stack.push(Slot {
+                    kind: elem_kind,
+                    value: match elem_kind & 0xff {
+                        KIND_STRING => Value::Str {
+                            handle: bits,
+                            owned: false,
+                        },
+                        KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
+                            handle: bits,
+                            owned: false,
+                        },
+                        _ => Value::Int(bits as i64),
+                    },
+                });
+                Ok(())
+            }
+            "std.list::put" => {
+                let value = self.pop(stack, span, "list.put")?;
+                let index = self.pop(stack, span, "list.put")?;
+                let list = self.pop(stack, span, "list.put")?;
+                if (list.kind & 0xff) != KIND_LIST {
+                    list.drop_owned();
+                    index.drop_owned();
+                    value.drop_owned();
+                    return Err(InterpretError::new(
+                        "'list.put' requires a list",
+                        span,
+                        "E372",
+                    ));
+                }
+                let handle = match list.value {
+                    Value::Heap { handle, .. } => handle,
+                    other => {
+                        other.drop_owned();
+                        index.drop_owned();
+                        value.drop_owned();
+                        return Err(InterpretError::new(
+                            "'list.put' requires a list handle",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let idx = match index.value {
+                    Value::Int(n) => n,
+                    other => {
+                        other.drop_owned();
+                        list.drop_owned();
+                        value.drop_owned();
+                        return Err(InterpretError::new(
+                            "'list.put' requires an integer index",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let len = runtime::yarrow_list_len(handle) as i64;
+                if idx < 0 || idx >= len {
+                    list.drop_owned();
+                    value.drop_owned();
+                    return Err(InterpretError::new(
+                        format!("'list.put' index {idx} out of range (list length {len})"),
+                        span,
+                        "E372",
+                    ));
+                }
+                let elem_kind = list.kind >> 8;
+                let bits = value.value.as_bits().unwrap_or(0);
+                // The list owns its elements: release the one being replaced,
+                // unless the new value is that same element (borrow put back).
+                let old = runtime::yarrow_list_get(handle, idx as u64);
+                if old != 0 && old != bits {
+                    free_value(old, elem_kind);
+                }
+                // Transfer ownership of heap bits into the list storage.
+                match value.value {
+                    Value::Str { owned: true, .. }
+                    | Value::Heap { owned: true, .. }
+                    | Value::Array(_) => {}
+                    other => other.drop_owned(),
+                }
+                runtime::yarrow_list_set(handle, idx as u64, bits);
+                stack.push(list);
+                Ok(())
+            }
+            "std.map::len" => {
+                let map = self.pop(stack, span, "map.len")?;
+                if (map.kind & 0xff) != KIND_MAP {
+                    map.drop_owned();
+                    return Err(InterpretError::new(
+                        "'map.len' requires a hashmap",
+                        span,
+                        "E372",
+                    ));
+                }
+                let handle = match map.value {
+                    Value::Heap { handle, .. } => handle,
+                    other => {
+                        other.drop_owned();
+                        return Err(InterpretError::new(
+                            "'map.len' requires a hashmap handle",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let len = runtime::yarrow_map_len(handle) as i64;
+                map.drop_owned();
+                stack.push(Slot {
+                    value: Value::Int(len),
+                    kind: 4,
+                });
+                Ok(())
+            }
+            "std.map::get" => {
+                let key = self.pop(stack, span, "map.get")?;
+                let map = self.pop(stack, span, "map.get")?;
+                if (map.kind & 0xff) != KIND_MAP {
+                    map.drop_owned();
+                    key.drop_owned();
+                    return Err(InterpretError::new(
+                        "'map.get' requires a hashmap",
+                        span,
+                        "E372",
+                    ));
+                }
+                let handle = match map.value {
+                    Value::Heap { handle, .. } => handle,
+                    other => {
+                        other.drop_owned();
+                        key.drop_owned();
+                        return Err(InterpretError::new(
+                            "'map.get' requires a hashmap handle",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let key_kind = (map.kind >> 8) & 0xff;
+                let key_bits = match (&key.value, key_kind) {
+                    (Value::Str { handle, .. }, KIND_STRING) => *handle,
+                    (Value::Int(n), k) if k != KIND_STRING => *n as u64,
+                    _ => {
+                        map.drop_owned();
+                        key.drop_owned();
+                        return Err(InterpretError::new(
+                            "'map.get' key does not match the map key type",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let mut found = 0u8;
+                let bits = unsafe { runtime::yarrow_map_get(handle, key_bits, &mut found) };
+                if found == 0 {
+                    map.drop_owned();
+                    key.drop_owned();
+                    return Err(InterpretError::new(
+                        "'map.get' key not found in map",
+                        span,
+                        "E372",
+                    ));
+                }
+                let val_kind = map.kind >> 40;
+                map.drop_owned();
+                key.drop_owned();
+                stack.push(Slot {
+                    kind: val_kind,
+                    value: match val_kind & 0xff {
+                        KIND_STRING => Value::Str {
+                            handle: bits,
+                            owned: false,
+                        },
+                        KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
+                            handle: bits,
+                            owned: false,
+                        },
+                        _ => Value::Int(bits as i64),
+                    },
+                });
+                Ok(())
+            }
+            "std.map::put" => {
+                let value = self.pop(stack, span, "map.put")?;
+                let key = self.pop(stack, span, "map.put")?;
+                let map = self.pop(stack, span, "map.put")?;
+                if (map.kind & 0xff) != KIND_MAP {
+                    map.drop_owned();
+                    key.drop_owned();
+                    value.drop_owned();
+                    return Err(InterpretError::new(
+                        "'map.put' requires a hashmap",
+                        span,
+                        "E372",
+                    ));
+                }
+                let handle = match map.value {
+                    Value::Heap { handle, .. } => handle,
+                    other => {
+                        other.drop_owned();
+                        key.drop_owned();
+                        value.drop_owned();
+                        return Err(InterpretError::new(
+                            "'map.put' requires a hashmap handle",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let key_kind = (map.kind >> 8) & 0xff;
+                let val_kind = map.kind >> 40;
+                let key_bits = match (&key.value, key_kind) {
+                    (Value::Str { handle, .. }, KIND_STRING) => *handle,
+                    (Value::Int(n), k) if k != KIND_STRING => *n as u64,
+                    _ => {
+                        map.drop_owned();
+                        key.drop_owned();
+                        value.drop_owned();
+                        return Err(InterpretError::new(
+                            "'map.put' key does not match the map key type",
+                            span,
+                            "E372",
+                        ));
+                    }
+                };
+                let val_bits = value.value.as_bits().unwrap_or(0);
+                // The map owns its values: release the one being replaced,
+                // unless the new value is that same value (borrow put back).
+                let mut found = 0u8;
+                let old = unsafe { runtime::yarrow_map_get(handle, key_bits, &mut found) };
+                if found != 0 && old != 0 && old != val_bits {
+                    free_value(old, val_kind);
+                }
+                // Transfer ownership of heap bits into the map storage.
+                match key.value {
+                    Value::Str { owned: true, .. }
+                    | Value::Heap { owned: true, .. }
+                    | Value::Array(_) => {}
+                    other => other.drop_owned(),
+                }
+                match value.value {
+                    Value::Str { owned: true, .. }
+                    | Value::Heap { owned: true, .. }
+                    | Value::Array(_) => {}
+                    other => other.drop_owned(),
+                }
+                runtime::yarrow_map_insert(handle, key_bits, val_bits);
+                stack.push(map);
+                Ok(())
+            }
             other => Err(InterpretError::unsupported(
                 format!("std intrinsic {other}"),
                 span,

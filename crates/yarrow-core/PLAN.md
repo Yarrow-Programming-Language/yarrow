@@ -51,20 +51,20 @@ in condition-`for` and iterable-`for`; the stack stays balanced.
 not implement, so they fail with `E393` even though `lib/std/list.yar` and
 `lib/std/map.yar` document them.
 
-- [ ] 1.2.1 Implement `std.list::get`: pop an index and a list, push the
+- [x] 1.2.1 Implement `std.list::get`: pop an index and a list, push the
   element at that index as a borrow (`owned: false`), using
   `runtime::yarrow_list_get`. Out-of-range index must produce a user
   diagnostic, not a panic.
-- [ ] 1.2.2 Implement `std.list::put`: pop a value and an index and a list,
+- [x] 1.2.2 Implement `std.list::put`: pop a value and an index and a list,
   write the element in place with the host list runtime, push the list back.
-- [ ] 1.2.3 Implement `std.map::len`: pop a map, push
+- [x] 1.2.3 Implement `std.map::len`: pop a map, push
   `runtime::yarrow_map_len` as `i64`.
-- [ ] 1.2.4 Implement `std.map::get`: pop a key and a map, push the value for
+- [x] 1.2.4 Implement `std.map::get`: pop a key and a map, push the value for
   that key. Decide and document the missing-key behavior (error tag versus
   default value) before implementing.
-- [ ] 1.2.5 Implement `std.map::put`: pop a value and a key and a map, insert
+- [x] 1.2.5 Implement `std.map::put`: pop a value and a key and a map, insert
   with `runtime::yarrow_map_insert`, push the map back.
-- [ ] 1.2.6 Keep ownership handling consistent with `std.list::push_last`:
+- [x] 1.2.6 Keep ownership handling consistent with `std.list::push_last`:
   heap bits transferred into the container are not freed by the stack slot.
 
 Acceptance: each intrinsic runs on `list<i32>`, `list<string>`, and

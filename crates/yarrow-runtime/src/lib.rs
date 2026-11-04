@@ -321,6 +321,20 @@ pub extern "C" fn yarrow_list_push(l: u64, value: u64) {
     }
 }
 
+/// Overwrite the element at `index` with `value`. No-op when `index` is out of
+/// range; callers bounds-check before calling.
+pub extern "C" fn yarrow_list_set(l: u64, index: u64, value: u64) {
+    unsafe {
+        let list = &mut *(l as *mut List);
+        if index >= list.len as u64 {
+            return;
+        }
+        let dst = list.data.add(index as usize * list.elem_size);
+        let src = (&value as *const u64) as *const u8;
+        std::ptr::copy_nonoverlapping(src, dst, list.elem_size);
+    }
+}
+
 /// Free a list and every element, using `elem_kind` to decide how to recurse.
 fn free_list(l: u64, elem_kind: u64) {
     if l == 0 || FREED.lock().unwrap().contains(&l) {
@@ -1227,6 +1241,13 @@ pub static HOST_FNS: std::sync::LazyLock<Vec<HostFn>> = std::sync::LazyLock::new
             params: &[KIND_I64, KIND_I64],
             returns: &[],
             address: yarrow_list_push as *const () as usize,
+            safety: Safety::Safe,
+        },
+        HostFn {
+            name: "list_set",
+            params: &[KIND_I64, KIND_I64, KIND_I64],
+            returns: &[],
+            address: yarrow_list_set as *const () as usize,
             safety: Safety::Safe,
         },
         HostFn {
