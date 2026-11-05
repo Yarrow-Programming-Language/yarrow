@@ -4180,6 +4180,20 @@ impl Interpreter {
         match op {
             StackOp::Dup => {
                 let v = self.peek(stack, span)?;
+                // Audit-3 PLAN 1.1.2: `dup` duplicates copy values only.
+                // An owned heap value (string, list, hashmap, struct,
+                // union, string-carried enum) is rejected; an unowned
+                // handle is a reference, which stays legal to duplicate.
+                if matches!(
+                    v.value,
+                    Value::Str { owned: true, .. } | Value::Heap { owned: true, .. }
+                ) {
+                    return Err(InterpretError::new(
+                        "dup applies to copy types only: borrow the value instead of duplicating it",
+                        span,
+                        "E371",
+                    ));
+                }
                 let cloned = Slot {
                     value: v.value.clone_for_stack(),
                     kind: v.kind,

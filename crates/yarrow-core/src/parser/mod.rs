@@ -1153,10 +1153,11 @@ impl Parser {
             TokenKind::Dup => {
                 self.advance();
                 let dup_span = self.prev_span();
-                // Clone a concrete value word at parse time (e.g. `i dup 1 + set`).
-                // Leave `Apply*` / stack ops to runtime so flat postfix sequences
-                // are not scrambled.
-                if ops.last().is_some_and(is_dupable_word) {
+                // Clone a statically copy value word at parse time (a
+                // literal or a type value). Every other `dup` emits
+                // `StackOp::Dup` so the checker sees it and effectful or
+                // owning words are not re-executed (audit-3 PLAN 1.1.1).
+                if ops.last().is_some_and(is_copy_literal_word) {
                     ops.push(ops[ops.len() - 1].clone());
                     op_spans.push(*op_spans.last().unwrap());
                 } else {
@@ -1770,6 +1771,14 @@ fn pop_target(ops: &mut Vec<Expr>, op_spans: &mut Vec<Span>) -> Option<(Expr, Sp
         .position(|e| matches!(e, Expr::Variable { .. } | Expr::Member { .. }))?;
     let e = ops.remove(index);
     let s = op_spans.remove(index);
+    // Audit-3 PLAN 1.1.1: a `dup` directly above the removed target now
+    // emits `StackOp::Dup` instead of a parse-time clone. Re-insert one
+    // read of the target so the runtime `dup` has its producer in the
+    // value; the target word itself is not re-executed.
+    if matches!(ops.get(index), Some(Expr::StackOp(StackOp::Dup))) {
+        ops.insert(index, e.clone());
+        op_spans.insert(index, s);
+    }
     Some((e, s))
 }
 
@@ -1804,6 +1813,21 @@ fn literal_expr(tok: &Token) -> ParseResult<Expr> {
         TokenKind::False => Ok(Expr::Bool { value: false }),
         _ => Ok(Expr::variable("")),
     }
+}
+
+/// A postfix word that is statically a copy value: an integer, float,
+/// bool, or rune literal, or a type value. Only these may be cloned at
+/// parse time by `dup`; the clone cannot re-execute an effect or
+/// duplicate an owned heap value (audit-3 PLAN 1.1.1).
+fn is_copy_literal_word(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Integer { .. }
+            | Expr::Float { .. }
+            | Expr::Bool { .. }
+            | Expr::Rune { .. }
+            | Expr::TypeValue { .. }
+    )
 }
 
 /// A postfix word that pushes (or names) a value and is safe to clone/reorder

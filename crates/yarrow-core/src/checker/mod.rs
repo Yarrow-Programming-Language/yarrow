@@ -24,8 +24,8 @@
 //!
 //! PLAN 3.3 (copy rules) restricts `dup` to copy types:
 //!
-//! - E371: `dup` over an owned heap temporary or a live borrow, both of
-//!   which are non-copy values (borrows of copy values stay copies).
+//! - E371: `dup` over an owned heap temporary, a non-copy value. Duplicating
+//!   a borrow or reference is legal (audit-3 PLAN 1.2.1).
 //!
 //! PLAN 3.4 (static variables) restricts `static` initializers to
 //! compile-time constants:
@@ -2347,9 +2347,8 @@ impl Checker {
             StackOp::Dup => match self.stack.last().cloned() {
                 // PLAN 3.3.1: an owned heap temporary is a non-copy value;
                 // `dup` is restricted to copy types. Report it, then keep
-                // the PLAN 3.1 modeling (the runtime clones the handle
-                // unowned) so the rest of the walk sees the stack it would
-                // see without the rule.
+                // modeling a stack the rest of the walk can follow so one
+                // mistake yields one diagnostic, not a cascade.
                 Some(Slot::Owned(temp, ty)) => {
                     self.emit_dup_non_copy(span);
                     let key = BorrowKey::Temp(temp);
@@ -2358,13 +2357,12 @@ impl Checker {
                     }
                     self.push_slot(Slot::Borrow(key, ty));
                 }
-                // A borrow is always of a heap value (borrows of copy
-                // values stay copies), so this is also a non-copy `dup`.
-                // Push the borrow without re-registering it: the original
-                // borrow is already live, and a second E375 here would
-                // cascade.
+                // Audit-3 PLAN 1.2.1: duplicating a borrow or reference is
+                // legal (references are not in the spec's non-copy list).
+                // Push the same borrow without re-registering it: the
+                // original borrow is already live, and a second E375 here
+                // would cascade.
                 Some(Slot::Borrow(key, ty)) => {
-                    self.emit_dup_non_copy(span);
                     self.push_slot(Slot::Borrow(key, ty));
                 }
                 Some(slot) => self.push_slot(slot),
