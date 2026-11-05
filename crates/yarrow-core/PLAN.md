@@ -462,14 +462,57 @@ Recorded implementation decisions (Stage 8):
   drop the stale `\convert the value` advice; no `\` operator exists in
   the grammar or the tokenizer.
 
-- [ ] 8.1.1 Checker: the four conversions at all coercion sites; `E310`
+- [x] 8.1.1 Checker: the four conversions at all coercion sites; `E310`
   only for the rest.
-- [ ] 8.1.2 Interpreter: mirror the rule for module units and the REPL.
-- [ ] 8.1.3 Update `E310`'s message, help text, and explain entry.
+- [x] 8.1.2 Interpreter: mirror the rule for module units and the REPL.
+- [x] 8.1.3 Update `E310`'s message, help text, and explain entry.
 
 Acceptance: p42 runs (all four conversions plus mixed promotion); p47
 still narrows fitting values and still rejects `1000 z const u8` with
 `E310`; the corpus still passes.
+
+Stage 8 findings, recorded when the stage closed:
+
+- The checker's share of two sites is vacuous: container/struct literal
+  elements and `handle` fallback values are opaque slots (the checker
+  does not model element or payload types), so the binding, `set`, and
+  parameter sites (all through `binds`) carry the whole checker change.
+  The `E312` operand help text was rewritten alongside `E310`'s because
+  operands coerce like bindings.
+- The interpreter coerces at the value level, not just the kind label:
+  integer-to-float converts to the float carrier, float-to-integer
+  saturates through Rust's `as` (NaN to 0, out of range to the target
+  bound), bool-to-integer yields `0`/`1`, and integer-to-bool compares
+  against zero. Integer-to-integer keeps a runtime fit check, so an
+  out-of-range narrowing in a module unit fails at runtime with the
+  `E310` "narrowing coercion must preserve the value" message (verified
+  with a required module binding 1000 to `u8`).
+- A scalar mismatch outside the matrix now fails with `E310` in the
+  interpreter instead of silently relabeling the kind (verified: an
+  `f32` passed to `io.write_line`'s `string` parameter). Structured
+  kinds (struct, list, hashmap, array, union, enum, error) keep the
+  existing relabel behavior, and an integer address still passes into
+  `pointer<T>` (the matrix's null-style init; `mem.allocate` bindings
+  are unchanged).
+- A deeper gap closed beneath the literal-element site: width-limited
+  inline storage (struct fields, inline array-field elements, pointer
+  pointees) truncated the f64 bit pattern for `f32` slots, so a float
+  field never round-tripped, same-type demotion included. Inline
+  stores now write the `f32` encoding and inline reads convert back to
+  the f64 carrier (verified: int-to-float, int narrowing, and `f32`
+  demotion all round-trip through a struct field). `f16` keeps the raw
+  bits: the toolchain has no stable half-float conversion; pre-existing,
+  unused, and unchanged.
+- `list.get` and list iteration read elements through the shared
+  bits-to-value conversion now, so float and bool elements reconstruct
+  (both previously pushed the raw bits as an integer); a coerced list
+  element round-trips (verified for `list<f64>` and `list<i32>`).
+- Function parameters coerce at call entry to the declared kind
+  (verified: an integer argument to an `f32` parameter and a bool to
+  an `i32` parameter); the method receiver is a no-op because a borrow
+  already carries the pointee kind. The `handle` fallback coerces to
+  the success payload's kind (verified: a fallible `f32` call with
+  fallback `0` yields `0.0`).
 
 ## Stage 9: Unicode rune literals
 

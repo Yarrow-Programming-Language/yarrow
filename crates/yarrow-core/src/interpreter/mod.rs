@@ -1638,6 +1638,30 @@ impl Interpreter {
                 }
             }
         }
+        // PLAN Stage 8: each argument coerces to its parameter's declared
+        // kind (the documented matrix), backstopping the checker for
+        // module units and the REPL.
+        for (i, param) in entry.function.params.iter().enumerate() {
+            let pk = self.binding_type_kind(
+                &param.ty,
+                entry.module.as_deref(),
+                &local_aliases,
+                Span::default(),
+            )?;
+            if let Some(arg) = local_stack.get_mut(i) {
+                *arg = self.coerce_to_kind(
+                    std::mem::replace(
+                        arg,
+                        Slot {
+                            value: Value::Int(0),
+                            kind: 4,
+                        },
+                    ),
+                    pk,
+                    Span::default(),
+                )?;
+            }
+        }
         // PLAN 4.1: the signature resolver consults the function's own
         // aliases before the global ones.
         let error_payload = self.fallible_payload(&entry.function.returns, &local_aliases);
@@ -2131,9 +2155,9 @@ impl Interpreter {
                 // Stage 2: a union-typed binding wraps its initializer into
                 // the union, container literals included; every binding
                 // then takes its declared kind, which also coerces scalar
-                // literals.
+                // literals (PLAN Stage 8: the documented matrix).
                 slot = self.coerce_to_binding(slot, ty, module, &frame.local_aliases, stmt.span)?;
-                slot.kind = kind;
+                slot = self.coerce_to_kind(slot, kind, stmt.span)?;
                 // PLAN 1.3: `array<T>` with no declared size infers `N` from
                 // a non-empty array literal. An explicit `N` always wins
                 // (inference only runs for `size: None`); an empty literal
@@ -2207,7 +2231,8 @@ impl Interpreter {
                             slot =
                                 self.wrap_union_value(slot, (old.kind >> 8) as u32, stmt.span)?;
                         } else {
-                            slot.kind = old.kind;
+                            // PLAN Stage 8: `set` coerces like a binding.
+                            slot = self.coerce_to_kind(slot, old.kind, stmt.span)?;
                         }
                         if let Some(old) = frame.locals.insert(name.clone(), slot) {
                             old.drop_owned();
@@ -2272,7 +2297,7 @@ impl Interpreter {
                             base_slot.drop_owned();
                             return Ok(Flow::Next);
                         }
-                        let bits = slot.value.as_bits().unwrap_or(0);
+                        let bits = inline_storage_bits(&slot.value, field.kind);
                         write_bits_at(handle, field.offset, field.size, bits);
                         // Field storage owns heap bits; do not drop the new value.
                         match slot.value {
@@ -2848,28 +2873,11 @@ impl Interpreter {
                         stack.pop().unwrap().drop_owned();
                     }
                     let bits = runtime::yarrow_list_get(handle, i);
-                    let elem_slot = Slot {
-                        kind: elem_kind,
-                        value: match elem_kind & 0xff {
-                            KIND_STRING => Value::Str {
-                                handle: bits,
-                                owned: false,
-                            },
-                            KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
-                                handle: bits,
-                                owned: false,
-                            },
-                            // PLAN 3.2: a string-carried enum element is a
-                            // heap string handle.
-                            t if t == KIND_ENUM && self.enum_carrier(elem_kind) == KIND_STRING => {
-                                Value::Str {
-                                    handle: bits,
-                                    owned: false,
-                                }
-                            }
-                            _ => Value::Int(bits as i64),
-                        },
-                    };
+                    // PLAN Stage 8: the element reads back through the
+                    // shared bits-to-value conversion, so float and bool
+                    // elements reconstruct (a coerced element
+                    // round-trips).
+                    let elem_slot = self.bits_to_slot_kind(bits, elem_kind, false);
                     frame.loops.push(LoopCtx {
                         value: Some(elem_slot),
                         index: Some(i as i64),
@@ -3295,7 +3303,9 @@ impl Interpreter {
                     for i in 0..count {
                         let bits =
                             read_bits_at(handle, field.offset + (i as i32) * (esize as i32), esize);
-                        elems.push(self.bits_to_slot_kind(bits, elem_kind, false).value);
+                        let slot = inline_bits_to_slot(bits, elem_kind)
+                            .unwrap_or_else(|| self.bits_to_slot_kind(bits, elem_kind, false));
+                        elems.push(slot.value);
                     }
                     base_slot.drop_owned();
                     stack.push(Slot {
@@ -3306,7 +3316,10 @@ impl Interpreter {
                 }
                 let bits = read_bits_at(handle, field.offset, field.size);
                 base_slot.drop_owned();
-                stack.push(self.bits_to_slot_kind(bits, field.kind, false));
+                stack.push(
+                    inline_bits_to_slot(bits, field.kind)
+                        .unwrap_or_else(|| self.bits_to_slot_kind(bits, field.kind, false)),
+                );
                 Ok(())
             }
             Expr::TypeValue { ty } => {
@@ -3496,7 +3509,7 @@ impl Interpreter {
                         ));
                     }
                 };
-                let bits = val.value.as_bits().unwrap_or(0);
+                let bits = inline_storage_bits(&val.value, pointee);
                 write_bits_at(addr, 0, self.pointee_size(pointee), bits);
                 match val.value {
                     Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
@@ -3565,7 +3578,10 @@ impl Interpreter {
         };
         let bits = read_bits_at(addr, 0, self.pointee_size(pointee));
         addr_slot.drop_owned();
-        stack.push(self.bits_to_slot_kind(bits, pointee, false));
+        stack.push(
+            inline_bits_to_slot(bits, pointee)
+                .unwrap_or_else(|| self.bits_to_slot_kind(bits, pointee, false)),
+        );
         Ok(())
     }
 
@@ -4093,20 +4109,10 @@ impl Interpreter {
                 let elem_kind = list.kind >> 8;
                 let bits = runtime::yarrow_list_get(handle, idx as u64);
                 list.drop_owned();
-                stack.push(Slot {
-                    kind: elem_kind,
-                    value: match elem_kind & 0xff {
-                        KIND_STRING => Value::Str {
-                            handle: bits,
-                            owned: false,
-                        },
-                        KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
-                            handle: bits,
-                            owned: false,
-                        },
-                        _ => Value::Int(bits as i64),
-                    },
-                });
+                // PLAN Stage 8: the element reads back through the shared
+                // bits-to-value conversion, so float and bool elements
+                // reconstruct (a coerced element round-trips).
+                stack.push(self.bits_to_slot_kind(bits, elem_kind, false));
                 Ok(())
             }
             "std.list::put" => {
@@ -5324,6 +5330,9 @@ impl Interpreter {
             stack.push(payload);
             return Ok(Flow::Next);
         }
+        // PLAN Stage 8: the fallback must be usable at the success type
+        // of the handled call, so it coerces to the payload's kind.
+        let payload_kind = payload.kind;
         payload.drop_owned();
         stack.push(Slot {
             value: Value::Int(tag),
@@ -5348,6 +5357,10 @@ impl Interpreter {
         }
         if let Some(fb) = fallback {
             self.eval_expr(fb, stack, frame, module, caller_fq, span)?;
+            if let Some(top) = stack.pop() {
+                let top = self.coerce_to_kind(top, payload_kind, span)?;
+                stack.push(top);
+            }
         }
         Ok(Flow::Next)
     }
@@ -5418,11 +5431,14 @@ impl Interpreter {
             if (field.kind & 0xff) == KIND_UNION {
                 val = self.wrap_union_value(val, (field.kind >> 8) as u32, span)?;
             }
+            // PLAN Stage 8: a field value coerces to the field's declared
+            // kind (the documented matrix).
+            val = self.coerce_to_kind(val, field.kind, span)?;
             if (field.kind & 0xff) == KIND_ARRAY {
                 self.store_array_field(handle, field, val, span)?;
                 continue;
             }
-            let bits = val.value.as_bits().unwrap_or(0);
+            let bits = inline_storage_bits(&val.value, field.kind);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     &bits as *const u64 as *const u8,
@@ -5638,6 +5654,9 @@ impl Interpreter {
         for e in elems {
             self.eval_expr(e, stack, frame, module, caller_fq, span)?;
             let val = self.pop(stack, span, "list element")?;
+            // PLAN Stage 8: an element coerces to the declared element
+            // kind (the documented matrix).
+            let val = self.coerce_to_kind(val, ek, span)?;
             let bits = val.value.as_bits().unwrap_or(0);
             match val.value {
                 Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
@@ -5700,9 +5719,13 @@ impl Interpreter {
         let handle = runtime::yarrow_map_new(u64::from(kk == KIND_STRING));
         for (k, v) in pairs {
             self.eval_expr(k, stack, frame, module, caller_fq, span)?;
+            // PLAN Stage 8: keys and values coerce to the declared kinds
+            // (the documented matrix).
             let key = self.pop(stack, span, "map key")?;
+            let key = self.coerce_to_kind(key, kk, span)?;
             self.eval_expr(v, stack, frame, module, caller_fq, span)?;
             let val = self.pop(stack, span, "map value")?;
+            let val = self.coerce_to_kind(val, vk, span)?;
             let kb = key.value.as_bits().unwrap_or(0);
             let vb = val.value.as_bits().unwrap_or(0);
             match key.value {
@@ -5779,6 +5802,108 @@ impl Interpreter {
         Ok(slot)
     }
 
+    /// PLAN Stage 8 (the documented coercion matrix): coerce a slot to a
+    /// declared kind at a typed site (binding, `set`, parameter, literal
+    /// element, `handle` fallback). Two plain primitives go through the
+    /// scalar matrix in [`Self::coerce_scalar`]; an integer address also
+    /// passes into `pointer<T>` (the matrix's null-style init, e.g. a
+    /// `mem.allocate` result). Structured kinds (struct, list, hashmap,
+    /// array, union, enum, error) keep the existing relabel behavior;
+    /// the checker gates the main unit.
+    fn coerce_to_kind(&self, slot: Slot, to: u64, span: Span) -> IResult<Slot> {
+        if slot.kind == to {
+            return Ok(slot);
+        }
+        let from = slot.kind;
+        if from <= 16 && to <= 16 {
+            return self.coerce_scalar(slot, to, span);
+        }
+        Ok(Slot {
+            value: slot.value,
+            kind: to,
+        })
+    }
+
+    /// PLAN Stage 8: the scalar half of the coercion matrix. Both kinds
+    /// are plain primitive codes: integer to integer keeps the fit check
+    /// (a narrowing must preserve the value), integer to float converts,
+    /// float to float relabels, float to integer saturates (NaN to 0, out
+    /// of range to the nearest bound), bool to integer yields `0` / `1`,
+    /// and integer to bool compares against zero. Every other scalar
+    /// combination is E310.
+    fn coerce_scalar(&self, slot: Slot, to: u64, span: Span) -> IResult<Slot> {
+        let from = slot.kind;
+        let is_int = |k: u64| int_carrier_range(k).is_some();
+        let is_float = |k: u64| matches!(k, 12..=14);
+        let mismatch = || {
+            InterpretError::new(
+                format!(
+                    "cannot coerce {} to {}: implicit coercion covers integer to integer \
+                     (a narrowing must preserve the value), float to float, integer to \
+                     float, float to integer (saturating), bool to integer, and integer \
+                     to bool",
+                    self.kind_code_label(from),
+                    self.kind_code_label(to)
+                ),
+                span,
+                "E310",
+            )
+        };
+        match slot.value {
+            Value::Int(n) if is_int(from) && is_int(to) => {
+                let (lo, hi) = int_carrier_range(to).expect("is_int checked the kind");
+                if (n as i128) < lo || (n as i128) > hi {
+                    return Err(InterpretError::new(
+                        format!(
+                            "cannot coerce {n} to {}: a narrowing coercion must preserve the value",
+                            self.kind_code_label(to)
+                        ),
+                        span,
+                        "E310",
+                    ));
+                }
+                Ok(Slot {
+                    value: Value::Int(n),
+                    kind: to,
+                })
+            }
+            Value::Int(n) if is_int(from) && is_float(to) => Ok(Slot {
+                value: Value::Float(n as f64),
+                kind: to,
+            }),
+            Value::Int(n) if is_int(from) && to == 0 => Ok(Slot {
+                value: Value::Bool(n != 0),
+                kind: to,
+            }),
+            Value::Float(x) if is_float(from) && is_float(to) => Ok(Slot {
+                value: Value::Float(x),
+                kind: to,
+            }),
+            Value::Float(x) if is_float(from) && is_int(to) => {
+                // Rust's `as` saturates (NaN to 0) to the target bound.
+                let n = match to {
+                    1 => x as i8 as i64,
+                    2 => x as i16 as i64,
+                    3 => x as i32 as i64,
+                    4 => x as i64,
+                    6 => x as u8 as i64,
+                    7 => x as u16 as i64,
+                    8 => x as u32 as i64,
+                    _ => x as u64 as i64,
+                };
+                Ok(Slot {
+                    value: Value::Int(n),
+                    kind: to,
+                })
+            }
+            Value::Bool(b) if from == 0 && is_int(to) => Ok(Slot {
+                value: Value::Int(i64::from(b)),
+                kind: to,
+            }),
+            _ => Err(mismatch()),
+        }
+    }
+
     /// Stage 1: release the heap elements of an inline array field before
     /// the field is overwritten or its struct freed by the interpreter.
     fn free_array_field(&self, base: u64, field: &FieldInfo) {
@@ -5849,7 +5974,7 @@ impl Interpreter {
                         runtime::yarrow_value_clone(*handle, elem_kind)
                     }
                 }
-                other => other.as_bits().unwrap_or(0),
+                other => inline_storage_bits(other, elem_kind),
             };
             write_bits_at(
                 base,
@@ -6421,6 +6546,32 @@ fn kind_elem_size(kind: u64) -> u32 {
         2 | 7 | 12 => 2,
         3 | 8 | 11 | 13 => 4,
         _ => 8,
+    }
+}
+
+/// PLAN Stage 8: storage bits of a scalar value for a width-limited
+/// inline slot (struct field, inline array element, pointer pointee).
+/// An f32 slot stores the f32 encoding, so a coerced or demoted float
+/// round-trips through inline storage (f16 keeps the raw f64 bits; the
+/// half-float conversion has no stable Rust support, see the stage
+/// findings).
+fn inline_storage_bits(value: &Value, kind: u64) -> u64 {
+    match (value, kind & 0xff) {
+        (Value::Float(x), 13) => (*x as f32).to_bits() as u64,
+        (value, _) => value.as_bits().unwrap_or(0),
+    }
+}
+
+/// PLAN Stage 8: the read side of [`inline_storage_bits`]: an f32
+/// slot's bits convert back to the interpreter's f64 carrier. Every
+/// other kind reads through `bits_to_slot_kind`.
+fn inline_bits_to_slot(bits: u64, kind: u64) -> Option<Slot> {
+    match kind & 0xff {
+        13 => Some(Slot {
+            value: Value::Float(f32::from_bits(bits as u32) as f64),
+            kind,
+        }),
+        _ => None,
     }
 }
 

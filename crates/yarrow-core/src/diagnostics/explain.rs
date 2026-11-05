@@ -113,12 +113,15 @@ calls to functions visible in the unit; results the checker cannot see \
         body: "\
 A declaration binds the value on the stack to its declared type, and \
 `set` reassigns a binding. Implicit coercion is allowed only inside the \
-coercion matrix: a value binds when the kinds are equal; an integer \
-value binds to any integer type (widening, and a literal's value is \
-range-checked); a float value binds to any float type; a named union \
-accepts any of its member types. Every other combination (bool to \
-integer, float to integer, string to anything else, one struct to \
-another) is rejected. Convert the value or change the declared type.",
+documented matrix: a value binds when the kinds are equal; an integer \
+value binds to any integer type (a narrowing must preserve the value, \
+and a literal's value is range-checked), to any float type, or to \
+`bool` (non-zero to `true`); a float value binds to any float type and \
+to any integer type (saturating: NaN to 0, out of range to the nearest \
+bound); a bool value binds to any integer type (`0` / `1`); a named \
+union accepts any of its member types. Every other combination (string \
+to anything else, one struct to another) is rejected. Convert the \
+value or change the declared type.",
     },
     ExplainEntry {
         code: "E311",

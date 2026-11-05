@@ -58,10 +58,13 @@
 //! PLAN Stage 6 (static type checking) extends the abstract slots with a
 //! static type: the interpreter's kind-code scheme (primitive kind codes
 //! plus named-type resolution through this unit's declarations). The
-//! coercion matrix: a value binds to a declared type when the kinds are
-//! equal; an integer value binds to any integer type (widening, with a
-//! literal's value range-checked when statically known); a float value
-//! binds to any float type; every other combination is an error. Module
+//! coercion matrix (PLAN 6.2, extended to the documented matrix by PLAN
+//! Stage 8): a value binds to a declared type when the kinds are equal;
+//! an integer value binds to any integer type (widening, with a
+//! literal's value range-checked when statically known), to any float
+//! type, or to `bool`; a float value binds to any float type and to any
+//! integer type (saturating); a bool value binds to any integer type;
+//! every other combination is an error. Module
 //! functions and module types stay opaque, so cross-unit calls are
 //! unchecked, exactly like the borrow-machine simplification.
 //!
@@ -364,23 +367,32 @@ fn type_label(ty: &Type) -> String {
     }
 }
 
-/// PLAN 6.2 coercion matrix: a value binds to a declared type when the
-/// kinds are equal; an integer value binds to any integer type (widening,
-/// with the literal's value range-checked when statically known); a
-/// float value binds to any float type; every other combination (bool to
-/// integer, float to integer, string to anything else, struct to another
-/// struct, and so on) is an error. An opaque value or declared type
-/// skips the check.
+/// PLAN 6.2 coercion matrix, extended by PLAN Stage 8 to the documented
+/// matrix: a value binds to a declared type when the kinds are equal;
+/// an integer value binds to any integer type (widening, with the
+/// literal's value range-checked when statically known; a narrowing
+/// must preserve the value), to any float type (convert), or to `bool`
+/// (non-zero to `true`); a float value binds to any float type and to
+/// any integer type (saturating convert); a bool value binds to any
+/// integer type (`0` / `1`, then widen). Every other combination (string
+/// to anything else, struct to another struct, and so on) is an error.
+/// An opaque value or declared type skips the check.
 fn binds(value: &Ty, declared: &Ty) -> bool {
     match (value, declared) {
         (Ty::Opaque, _) | (_, Ty::Opaque) => true,
         (Ty::IntLit(n), Ty::Prim(k)) => {
-            is_int_kind(*k) && int_carrier_range(*k).is_some_and(|(lo, hi)| *n >= lo && *n <= hi)
+            (is_int_kind(*k) && int_carrier_range(*k).is_some_and(|(lo, hi)| *n >= lo && *n <= hi))
+                || is_float_kind(*k)
+                || *k == 0
         }
         (Ty::Prim(v), Ty::Prim(d)) => {
             v == d
                 || (is_int_kind(*v) && is_int_kind(*d))
                 || (is_float_kind(*v) && is_float_kind(*d))
+                || (is_int_kind(*v) && is_float_kind(*d))
+                || (is_float_kind(*v) && is_int_kind(*d))
+                || (*v == 0 && is_int_kind(*d))
+                || (is_int_kind(*v) && *d == 0)
         }
         (Ty::Named(v), Ty::Named(d)) => v == d,
         _ => false,
@@ -1175,8 +1187,10 @@ impl Checker {
                         )
                         .with_primary(stmt.span, "")
                         .with_help(
-                            "implicit coercion covers the integer types (and the float types); \\\
-                             convert the value or change the declared type",
+                            "implicit coercion covers integer to integer (a narrowing must preserve \
+                             the value), float to float, integer to float, float to integer \
+                             (saturating), bool to integer, and integer to bool; every other \
+                             combination needs an exact match",
                         ),
                     );
                 }
@@ -1239,8 +1253,10 @@ impl Checker {
                             )
                             .with_primary(stmt.span, "")
                             .with_help(
-                                "implicit coercion covers the integer types (and the float types); \\\
-                                 convert the value or re-declare with the right type",
+                                "implicit coercion covers integer to integer (a narrowing must preserve \
+                                 the value), float to float, integer to float, float to integer \
+                                 (saturating), bool to integer, and integer to bool; every other \
+                                 combination needs an exact match",
                             ),
                         );
                     }
@@ -2369,8 +2385,10 @@ impl Checker {
                     )
                     .with_primary(span, "")
                     .with_help(
-                        "operands coerce like bindings: an integer widens to an integer \\\
-                         parameter; every other mismatch is rejected",
+                        "operands coerce like bindings: integer to integer (a narrowing must \
+                         preserve the value), float to float, integer to float, float to \
+                         integer (saturating), bool to integer, and integer to bool; \
+                         every other mismatch is rejected",
                     ),
                 );
             }
