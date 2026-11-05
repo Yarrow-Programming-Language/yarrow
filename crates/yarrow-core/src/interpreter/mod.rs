@@ -69,6 +69,9 @@ use crate::tokenizer::Tokenizer;
 const KIND_ERROR: u64 = 0x51;
 /// Raw `pointer<T>` tag; pointee kind code lives in the high bits (`>> 8`).
 const KIND_PTR: u64 = 0x50;
+/// PLAN 2.1.1: message for an empty `()`/`[]`/`{}` outside a typed context.
+const EMPTY_LIT_MSG: &str =
+    "empty `()`/`[]`/`{}` requires a typed context (e.g., variable declaration)";
 
 /// Runtime value on the interpreter operand stack / in a local.
 #[derive(Debug, Clone)]
@@ -1736,6 +1739,11 @@ impl Interpreter {
                     Some(Expr::Map(pairs)) => {
                         self.eval_map_lit(pairs, ty, stack, frame, module, caller_fq, stmt.span)?
                     }
+                    Some(Expr::Array(elems)) if elems.is_empty() => {
+                        // PLAN 2.1.1: the declared array type is the typed
+                        // context an empty `[]` needs.
+                        self.eval_empty_array(ty, stmt.span)?
+                    }
                     Some(Expr::Seq(elems)) => {
                         // Prior words are side effects; trailing literal is the value.
                         if elems.is_empty() {
@@ -1760,6 +1768,11 @@ impl Interpreter {
                             Expr::Map(pairs) => self.eval_map_lit(
                                 pairs, ty, stack, frame, module, caller_fq, *last_span,
                             )?,
+                            Expr::Array(elems) if elems.is_empty() => {
+                                // PLAN 2.1.1: trailing empty `[]` of the
+                                // initializer; the declared type types it.
+                                self.eval_empty_array(ty, *last_span)?
+                            }
                             other => {
                                 self.eval_expr(other, stack, frame, module, caller_fq, *last_span)?;
                                 let mut s = self.pop(stack, stmt.span, "value")?;
@@ -2562,6 +2575,11 @@ impl Interpreter {
                 Ok(())
             }
             Expr::Array(elems) => {
+                // PLAN 2.1.1: a bare empty `[]` has no element type; only
+                // a binding initializer supplies one (`eval_empty_array`).
+                if elems.is_empty() {
+                    return Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395"));
+                }
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
                     self.eval_expr(e, stack, frame, module, caller_fq, span)?;
@@ -2819,6 +2837,11 @@ impl Interpreter {
             Expr::Builtin { name } => self.eval_builtin(name, stack, span),
             Expr::Call { target } => self.eval_call(target, stack, frame, module, caller_fq, span),
             Expr::List(elems) => {
+                // PLAN 2.1.1: a bare empty `()` has no element type; only
+                // a binding initializer supplies one (`eval_list_lit`).
+                if elems.is_empty() {
+                    return Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395"));
+                }
                 // Untyped list literal: element kind from first element.
                 let mut values = Vec::with_capacity(elems.len());
                 for e in elems {
@@ -2885,11 +2908,7 @@ impl Interpreter {
                 });
                 Ok(())
             }
-            Expr::EmptyMapOrStruct => Err(InterpretError::new(
-                "empty `{}` requires a typed context (e.g., variable declaration)",
-                span,
-                "E395",
-            )),
+            Expr::EmptyMapOrStruct => Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395")),
             Expr::ApplyBorrow | Expr::Borrow { .. } => {
                 let s = self.pop(stack, span, "'borrow'")?;
                 // Borrow: keep handle, mark unowned so drop does not free.
@@ -4809,6 +4828,25 @@ impl Interpreter {
         }
     }
 
+    /// PLAN 2.1.1: an empty `[]` evaluates only in a typed binding
+    /// context; the declared `array<T N>` supplies the element kind (and
+    /// the size, which `array<T>` without `N` still rejects via E381).
+    fn eval_empty_array(&self, ty: &Type, span: Span) -> IResult<Slot> {
+        match &ty.kind {
+            TypeKind::Array { element, size } => {
+                let ek = self.type_kind_code(element).ok_or_else(|| {
+                    InterpretError::unsupported(format!("binding type {ty:?}"), span)
+                })?;
+                let count = size.unwrap_or(0);
+                Ok(Slot {
+                    value: Value::Array(Vec::new()),
+                    kind: 0x60 | (ek << 8) | (count << 40),
+                })
+            }
+            _ => Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395")),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn eval_list_lit(
         &mut self,
@@ -4822,6 +4860,11 @@ impl Interpreter {
     ) -> IResult<Slot> {
         let elem_ty = match &ty.kind {
             TypeKind::List { element } => element.as_ref(),
+            // PLAN 2.1.1: an empty `()` bound to a non-list type has no
+            // typed context.
+            _ if elems.is_empty() => {
+                return Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395"));
+            }
             _ => {
                 return Err(InterpretError::unsupported(
                     format!("list literal type {ty:?}"),

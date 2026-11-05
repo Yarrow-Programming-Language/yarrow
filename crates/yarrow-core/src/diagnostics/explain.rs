@@ -230,6 +230,18 @@ error type (for example `\"std.error\" error require`) or declare the error \
 type in this unit.",
     },
     ExplainEntry {
+        code: "E395",
+        title: "empty container literal without a typed context",
+        body: "\
+`()` (list), `[]` (array), and `{}` (hashmap or struct placeholder) have no \
+element type on their own, so they are valid only as the initializer of a \
+binding whose declared type supplies one: `() xs const list<i32>`, \
+`[] xs const array<i32 0>`, `{} m const hashmap<string i32>` (or `{}` for a \
+declared struct type). Anywhere else, a lone statement, an operand, a `dup` \
+source, or a call argument, the literal is rejected. Bind it in a \
+declaration first, then use the variable.",
+    },
+    ExplainEntry {
         code: "E396",
         title: "incompatible stacks at an if/else join",
         body: "\

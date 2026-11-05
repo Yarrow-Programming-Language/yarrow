@@ -136,11 +136,11 @@ Recorded implementation decisions (Stage 2):
 - The `E395` message and explain entry generalize to name all three empty
   literal forms, not only `{}`.
 
-- [ ] 2.1.1 Reject an empty `()`/`[]` that is not the direct initializer of
+- [x] 2.1.1 Reject an empty `()`/`[]` that is not the direct initializer of
   a binding with a declared container type: in the checker for the main
   unit, and in the interpreter for every unit (module bodies and the REPL
   included), with `E395`.
-- [ ] 2.1.2 Update the `E395` message and its explain entry to cover `()`,
+- [x] 2.1.2 Update the `E395` message and its explain entry to cover `()`,
   `[]`, and `{}`.
 
 Acceptance: `() list.len call` and `[] drop` fail with `E395`;

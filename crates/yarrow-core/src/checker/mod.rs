@@ -139,6 +139,9 @@ const CODE_CALL_TYPE_MISMATCH: &str = "E312";
 /// Diagnostic code reserved for a non-bool `if` / `for` condition or
 /// `match` case condition (PLAN 6.5).
 const CODE_CONDITION_NOT_BOOL: &str = "E313";
+/// Diagnostic code reserved for an empty `()`/`[]`/`{}` literal outside
+/// a typed context (PLAN 2.1.1).
+const CODE_EMPTY_LITERAL_UNTYPED: &str = "E395";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -1103,9 +1106,16 @@ impl Checker {
                 // A missing initializer binds the current stack top. The
                 // popped borrow stays live when the binding holds it
                 // (`bind_var_info` decides).
+                // PLAN 2.1.1: an empty `()`/`[]` is legal only as the
+                // value of a binding initializer whose declared type is a
+                // container (`list<T>`, `array<T N>`, `hashmap<K V>`).
+                let container_ctx = matches!(
+                    ty.kind,
+                    TypeKind::List { .. } | TypeKind::Array { .. } | TypeKind::Hashmap { .. }
+                );
                 let slot = match value {
                     Some(value) => {
-                        self.check_expr(value, stmt.span);
+                        self.check_binding_init(value, stmt.span, container_ctx);
                         self.pop_slot_raw()
                     }
                     None => self.pop_slot_raw(),
@@ -1755,6 +1765,52 @@ impl Checker {
     // Expressions (stack words)
     // -----------------------------------------------------------------
 
+    /// Check a binding initializer (PLAN 2.1.1). The trailing word of
+    /// the initializer sequence is the value; when the declared type is
+    /// a container, an empty `()`/`[]` there is the typed context the
+    /// spec requires. Earlier words are side effects and stay subject
+    /// to the bare-literal rule.
+    fn check_binding_init(&mut self, value: &Expr, span: Span, allow_empty: bool) {
+        match value {
+            Expr::Seq(elements) => {
+                for (element, element_span) in &elements[..elements.len().saturating_sub(1)] {
+                    self.check_expr(element, *element_span);
+                }
+                if let Some((last, last_span)) = elements.last() {
+                    self.check_binding_init(last, *last_span, allow_empty);
+                }
+            }
+            Expr::List(elements) if elements.is_empty() => {
+                if !allow_empty {
+                    self.reject_empty_lit(span);
+                }
+                let temp = self.fresh_temp();
+                self.push_slot(Slot::Owned(temp, Ty::Opaque));
+            }
+            Expr::Array(elements) if elements.is_empty() => {
+                if !allow_empty {
+                    self.reject_empty_lit(span);
+                }
+                self.push_slot(Slot::Copy(Ty::Opaque));
+            }
+            other => self.check_expr(other, span),
+        }
+    }
+
+    /// Emit E395 for an empty container literal with no typed context.
+    fn reject_empty_lit(&mut self, span: Span) {
+        self.emit(
+            Diagnostic::error(
+                CODE_EMPTY_LITERAL_UNTYPED,
+                "empty `()`/`[]`/`{}` requires a typed context (e.g., variable declaration)",
+            )
+            .with_primary(span, "")
+            .with_help(
+                "bind it in a declaration with a container type, e.g. `() xs const list<i32>`",
+            ),
+        );
+    }
+
     /// Check one expression, applying its stack effect to the abstract
     /// stack. `span` locates the expression for diagnostics.
     fn check_expr(&mut self, expr: &Expr, span: Span) {
@@ -1865,6 +1921,9 @@ impl Checker {
             }
             Expr::StackOp(op) => self.check_stack_op(*op, span),
             Expr::Array(elements) => {
+                if elements.is_empty() {
+                    self.reject_empty_lit(span);
+                }
                 for element in elements {
                     self.check_expr(element, span);
                 }
@@ -1872,6 +1931,9 @@ impl Checker {
                 self.push_slot(Slot::Copy(Ty::Opaque));
             }
             Expr::List(elements) => {
+                if elements.is_empty() {
+                    self.reject_empty_lit(span);
+                }
                 for element in elements {
                     self.check_expr(element, span);
                 }
