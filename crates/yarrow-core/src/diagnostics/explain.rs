@@ -149,9 +149,9 @@ checked at runtime.",
         body: "\
 `if` conditions, `for` sources, and `match` case conditions must be \
 bool. Comparisons push bool; a bare integer or string is not a \
-condition. A `for` source may also be an array or list to iterate. \
-Compare or convert the value first; the runtime rejects non-bool \
-match conditions the same way.",
+condition. A `for` source may also be an array, list, or hashmap to \
+iterate. Compare or convert the value first; the runtime rejects \
+non-bool match conditions the same way.",
     },
     ExplainEntry {
         code: "E334",

@@ -345,14 +345,43 @@ Recorded implementation decisions (Stage 6):
   `std.map`; pairs are not a language value.
 - The `E394` and `E313` messages shrink to the genuinely invalid sources.
 
-- [ ] 6.1.1 The runtime `for` dispatch accepts hashmap iterables with the
+- [x] 6.1.1 The runtime `for` dispatch accepts hashmap iterables with the
   semantics above.
-- [ ] 6.1.2 The checker accepts hashmap sources for the main unit.
-- [ ] 6.1.3 p13 runs and prints its line after iterating both values.
+- [x] 6.1.2 The checker accepts hashmap sources for the main unit.
+- [x] 6.1.3 p13 runs and prints its line after iterating both values.
 
 Acceptance: p13 runs; array and list iteration are unchanged;
 `loop.break` and `loop.continue` work in a hashmap loop; the corpus still
 passes.
+
+Stage 6 findings, recorded when the stage closed:
+
+- The checker half of the finding did not reproduce: a `hashmap<K V>`
+  binding resolves to an opaque type exactly like list and array
+  bindings, so the E313 guard (which rejects only known non-bool types)
+  already accepted a hashmap source. No checker rule was needed; the
+  E313 message, help text, explain entry, and comment now name the
+  hashmap.
+- Insertion order lives in the runtime map: a parallel `order` array
+  holds the slot index of each key in insertion order, rebuilt on every
+  rehash, and `yarrow_map_value_at` yields the value at each insertion
+  position. A `map.put` on an existing key keeps the key's original
+  position (a value update is not a reinsertion). Order survives a
+  rehash (verified with a ten-entry map that grows past its first
+  capacity).
+- `clone_map` now walks the slots in insertion order, so a deep copy
+  keeps the order (verified through a `hashmap<K V> copy` parameter).
+  Map printing (`@print`) still walks hash-slot order; pre-existing and
+  out of scope.
+- `loop.value` borrows each value like a list element (verified with
+  string and integer values), `loop.index` keeps its `E393` "not
+  available in this for" diagnostic, and `loop.break` / `loop.continue`
+  behave exactly as in a list loop (a `continue` does not stop the
+  rest of the body's statements; identical to the list loop).
+- The owned hashmap iterable is freed with its full kind code, so the
+  map's keys and values are released with it. The list arm frees with
+  the bare `KIND_LIST` tag (elements not released); pre-existing and
+  unchanged.
 
 ## Stage 7: `const` accepts one runtime `set`
 

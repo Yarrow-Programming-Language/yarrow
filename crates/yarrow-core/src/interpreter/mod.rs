@@ -2607,7 +2607,7 @@ impl Interpreter {
             other => {
                 other.drop_owned();
                 Err(InterpretError::new(
-                    "'for' requires a bool condition or an array or list iterable",
+                    "'for' requires a bool condition or an array, list, or hashmap iterable",
                     span,
                     "E394",
                 ))
@@ -2733,10 +2733,91 @@ impl Interpreter {
                 }
             }
             Value::Heap { handle, owned } => {
+                // PLAN 6.1.1: a hashmap iterable walks its values in
+                // insertion order. `loop.value` borrows each value with the
+                // same semantics as a list element; `loop.index` is not
+                // available and keeps its "not available in this for"
+                // diagnostic.
+                if (iterable.kind & 0xff) == KIND_MAP {
+                    let val_kind = iterable.kind >> 40;
+                    let len = runtime::yarrow_map_len(handle);
+                    for i in 0..len {
+                        while stack.len() > base {
+                            stack.pop().unwrap().drop_owned();
+                        }
+                        let bits = runtime::yarrow_map_value_at(handle, i);
+                        let elem_slot = Slot {
+                            kind: val_kind,
+                            value: match val_kind & 0xff {
+                                KIND_STRING => Value::Str {
+                                    handle: bits,
+                                    owned: false,
+                                },
+                                KIND_STRUCT | KIND_UNION | KIND_LIST | KIND_MAP => Value::Heap {
+                                    handle: bits,
+                                    owned: false,
+                                },
+                                // PLAN 3.2: a string-carried enum value is
+                                // a heap string handle.
+                                t if t == KIND_ENUM
+                                    && self.enum_carrier(val_kind) == KIND_STRING =>
+                                {
+                                    Value::Str {
+                                        handle: bits,
+                                        owned: false,
+                                    }
+                                }
+                                _ => Value::Int(bits as i64),
+                            },
+                        };
+                        frame.loops.push(LoopCtx {
+                            value: Some(elem_slot),
+                            index: None,
+                        });
+                        Self::defer_enter_scope(frame);
+                        let flow = self.eval_body(body, stack, frame, module, caller_fq)?;
+                        self.defer_exit_scope(stack, frame, module, caller_fq)?;
+                        if let Some(ctx) = frame.loops.pop()
+                            && let Some(v) = ctx.value
+                        {
+                            v.drop_owned();
+                        }
+                        match flow {
+                            Flow::Return => {
+                                if owned {
+                                    free_value(handle, iterable.kind);
+                                }
+                                return Ok(Flow::Return);
+                            }
+                            Flow::Break => {
+                                while stack.len() > base {
+                                    stack.pop().unwrap().drop_owned();
+                                }
+                                break;
+                            }
+                            Flow::Continue => continue,
+                            Flow::Next => {}
+                        }
+                        if stack.len() != base {
+                            if owned {
+                                free_value(handle, iterable.kind);
+                            }
+                            return Err(InterpretError::new(
+                                "for body must leave the stack balanced",
+                                span,
+                                "E325",
+                            ));
+                        }
+                    }
+                    if owned {
+                        free_value(handle, iterable.kind);
+                    }
+                    return Ok(Flow::Next);
+                }
                 if (iterable.kind & 0xff) != KIND_LIST {
                     iterable.drop_owned();
                     return Err(InterpretError::new(
-                        "'for' requires an array or list iterable",
+                        "'for' requires an array, list, or hashmap iterable",
                         span,
                         "E394",
                     ));
@@ -2816,7 +2897,7 @@ impl Interpreter {
             other => {
                 other.drop_owned();
                 return Err(InterpretError::new(
-                    "'for' requires an array or list iterable",
+                    "'for' requires an array, list, or hashmap iterable",
                     span,
                     "E394",
                 ));

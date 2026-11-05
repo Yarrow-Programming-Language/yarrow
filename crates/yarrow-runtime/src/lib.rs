@@ -92,6 +92,9 @@ struct Map {
     keys: *mut u64,
     vals: *mut u64,
     used: *mut u8,
+    /// Slot index of each key in insertion order (PLAN Stage 6: `for` over
+    /// a hashmap walks the values in insertion order). Holds `len` entries.
+    order: *mut u64,
 }
 
 /// A heap region: an owning set of values freed as a unit.
@@ -425,12 +428,26 @@ unsafe fn map_grow(map: &mut Map) {
         *new_vals.add(idx) = val;
         *new_used.add(idx) = 1;
     }
+    // Rebuild the insertion order by finding each key's new slot. The
+    // rehash copied the key bits unchanged, so a bit comparison locates
+    // the slot.
+    let new_order = libc::calloc(new_cap, std::mem::size_of::<u64>()) as *mut u64;
+    for k in 0..map.len {
+        let key = *map.keys.add(*map.order.add(k) as usize);
+        let mut idx = (hash_key(map, key) % new_cap as u64) as usize;
+        while *new_keys.add(idx) != key {
+            idx = (idx + 1) % new_cap;
+        }
+        *new_order.add(k) = idx as u64;
+    }
     libc::free(map.keys as *mut libc::c_void);
     libc::free(map.vals as *mut libc::c_void);
     libc::free(map.used as *mut libc::c_void);
+    libc::free(map.order as *mut libc::c_void);
     map.keys = new_keys;
     map.vals = new_vals;
     map.used = new_used;
+    map.order = new_order;
     map.cap = new_cap;
 }
 
@@ -445,6 +462,7 @@ pub extern "C" fn yarrow_map_new(keys_string: u64) -> u64 {
             keys: std::ptr::null_mut(),
             vals: std::ptr::null_mut(),
             used: std::ptr::null_mut(),
+            order: std::ptr::null_mut(),
         };
     }
     hdr as u64
@@ -462,6 +480,7 @@ pub extern "C" fn yarrow_map_insert(m: u64, key: u64, value: u64) {
                 *map.keys.add(idx) = key;
                 *map.vals.add(idx) = value;
                 *map.used.add(idx) = 1;
+                *map.order.add(map.len) = idx as u64;
                 map.len += 1;
                 return;
             }
@@ -506,6 +525,16 @@ pub extern "C" fn yarrow_map_len(m: u64) -> u64 {
     unsafe { (*(m as *const Map)).len as u64 }
 }
 
+/// Value at insertion-order position `k` (0-based, `k < yarrow_map_len`).
+/// PLAN Stage 6: `for` over a hashmap walks the values in insertion order.
+pub extern "C" fn yarrow_map_value_at(m: u64, k: u64) -> u64 {
+    unsafe {
+        let map = &*(m as *const Map);
+        let slot = *map.order.add(k as usize);
+        *map.vals.add(slot as usize)
+    }
+}
+
 /// Free a map and every key/value, using `key_kind`/`val_kind` to recurse.
 fn free_map(m: u64, key_kind: u64, val_kind: u64) {
     if m == 0 || FREED.lock().unwrap().contains(&m) {
@@ -530,6 +559,7 @@ fn free_map(m: u64, key_kind: u64, val_kind: u64) {
         libc::free(map.keys as *mut libc::c_void);
         libc::free(map.vals as *mut libc::c_void);
         libc::free(map.used as *mut libc::c_void);
+        libc::free(map.order as *mut libc::c_void);
         libc::free(m as *mut libc::c_void);
     }
     mark_freed(m);
@@ -774,10 +804,9 @@ fn clone_map(m: u64, key_kind: u64, val_kind: u64) -> u64 {
         let new = yarrow_map_new(map.keys_string as u64);
         let clone_keys = tag(key_kind) > 15 && key_kind != KIND_PTR;
         let clone_vals = tag(val_kind) > 15 && val_kind != KIND_PTR;
-        for i in 0..map.cap {
-            if *map.used.add(i) == 0 {
-                continue;
-            }
+        // Walk the slots in insertion order so the clone keeps it.
+        for k in 0..map.len {
+            let i = *map.order.add(k) as usize;
             let key = *map.keys.add(i);
             let val = *map.vals.add(i);
             let key = if clone_keys {

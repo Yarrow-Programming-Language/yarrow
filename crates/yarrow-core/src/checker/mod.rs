@@ -1369,10 +1369,11 @@ impl Checker {
             StmtKind::For { source, body } => {
                 self.check_expr(source, stmt.span);
                 // The loop consumes its condition / iterable. PLAN 6.5:
-                // the source is a bool condition or an array / list
-                // iterable; a value of any other known type is E313.
-                // Iterable bindings (list, array) are opaque to the
-                // checker, so every known non-bool source is rejected.
+                // the source is a bool condition or an array / list /
+                // hashmap iterable (PLAN 6.1.2); a value of any other
+                // known type is E313. Iterable bindings (list, array,
+                // hashmap) are opaque to the checker, so every known
+                // non-bool source is rejected.
                 let source = self.pop_releasing();
                 if let Some(slot) = &source
                     && !matches!(slot.ty(), Ty::Opaque)
@@ -1382,13 +1383,13 @@ impl Checker {
                         Diagnostic::error(
                             CODE_CONDITION_NOT_BOOL,
                             format!(
-                                "for source must be a bool condition or an array or list iterable, not {}",
+                                "for source must be a bool condition or an array, list, or hashmap iterable, not {}",
                                 ty_label(slot.ty())
                             ),
                         )
                         .with_primary(stmt.span, "")
                         .with_help(
-                            "comparisons push bool; iterate a list or array, or compare in the condition",
+                            "comparisons push bool; iterate a list, array, or hashmap, or compare in the condition",
                         ),
                     );
                 }
