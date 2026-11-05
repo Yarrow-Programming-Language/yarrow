@@ -445,6 +445,9 @@ struct VarInfo {
     /// Mutability of the declaration (PLAN 5.1.1): `set` is restricted to
     /// `mutable` bindings.
     mutability: Mutability,
+    /// PLAN 7.1.1: a `const` binding accepts exactly one runtime `set`;
+    /// this records that the one set already happened.
+    const_set: bool,
 }
 
 /// One lexical scope: its variables die (and release held borrows) at exit.
@@ -900,6 +903,7 @@ impl Checker {
                 holds: None,
                 moved: false,
                 mutability,
+                const_set: false,
             },
             slot,
         );
@@ -979,6 +983,7 @@ impl Checker {
                     holds: None,
                     moved: false,
                     mutability: Mutability::Mutable,
+                    const_set: false,
                 },
             );
         }
@@ -1183,29 +1188,42 @@ impl Checker {
                 }
                 let slot = self.pop_slot_raw().unwrap_or_else(Slot::opaque);
                 if let Expr::Variable { name } = target
-                    && let Some(var) = self.lookup_var(name).cloned()
+                    && let Some(mut var) = self.lookup_var(name).cloned()
                 {
-                    // PLAN 5.1.1: `set` is restricted to `mutable`
-                    // bindings; `const` is set once at runtime (its
-                    // initializer) and `static` is a compile-time constant.
-                    if matches!(var.mutability, Mutability::Const | Mutability::Static) {
-                        let kind = match var.mutability {
-                            Mutability::Const => "const",
-                            Mutability::Static => "static",
-                            Mutability::Mutable => unreachable!(),
-                        };
-                        self.emit(
-                            Diagnostic::error(
-                                CODE_SET_IMMUTABLE,
-                                format!(
-                                    "cannot `set` '{name}': the binding is {kind}, not mutable"
+                    // PLAN 7.1.1: a `const` binding accepts exactly one
+                    // runtime `set` after its declaration; a second `set`
+                    // and any `set` on a `static` binding fail with E378.
+                    match var.mutability {
+                        Mutability::Mutable => {}
+                        Mutability::Static => {
+                            self.emit(
+                                Diagnostic::error(
+                                    CODE_SET_IMMUTABLE,
+                                    format!(
+                                        "cannot `set` '{name}': the binding is static, not mutable"
+                                    ),
+                                )
+                                .with_primary(stmt.span, "")
+                                .with_help(
+                                    "a `static` binding is a compile-time constant; re-declare the name with `mutable`, or use a `mutable` binding",
                                 ),
-                            )
-                            .with_primary(stmt.span, "")
-                            .with_help(
-                                "re-declare the name with `mutable`, or use a `mutable` binding",
-                            ),
-                        );
+                            );
+                        }
+                        Mutability::Const if var.const_set => {
+                            self.emit(
+                                Diagnostic::error(
+                                    CODE_SET_IMMUTABLE,
+                                    format!(
+                                        "cannot `set` '{name}': the const binding already received its one set"
+                                    ),
+                                )
+                                .with_primary(stmt.span, "")
+                                .with_help(
+                                    "a `const` binding accepts exactly one `set`; re-declare the name with `mutable` for further updates",
+                                ),
+                            );
+                        }
+                        Mutability::Const => var.const_set = true,
                     }
                     // PLAN 6.2: `set` checks the value against the
                     // variable's recorded type (E310).
@@ -1716,6 +1734,7 @@ impl Checker {
                 holds: None,
                 moved: false,
                 mutability: Mutability::Mutable,
+                const_set: false,
             },
             slot,
         );

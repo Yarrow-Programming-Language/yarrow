@@ -403,14 +403,36 @@ Recorded implementation decisions (Stage 7):
 - The checker tracks the one-set state for the main unit; the interpreter
   backstops module units and the REPL.
 
-- [ ] 7.1.1 Checker: allow the first set on a const binding, reject the
+- [x] 7.1.1 Checker: allow the first set on a const binding, reject the
   second with `E378`; update the `E378` message and explain entry.
-- [ ] 7.1.2 Interpreter: mirror the rule for module units.
-- [ ] 7.1.3 The never-written warning (`21_warning_never_written`) stays
+- [x] 7.1.2 Interpreter: mirror the rule for module units.
+- [x] 7.1.3 The never-written warning (`21_warning_never_written`) stays
   correct: a const that is never set does not warn.
 
 Acceptance: p09 runs (the first set binds, the second fails with `E378`);
 the corpus and the warning examples pass unchanged.
+
+Stage 7 findings, recorded when the stage closed:
+
+- The checker carries the one-set state in `VarInfo` (`const_set`), so it
+  lives with the binding: the `set` path re-inserts the updated info, and
+  a re-declaration builds a fresh info, which resets the allowance
+  (verified: declare, set, re-declare, set again runs). A `set` on a
+  `static` binding keeps its own `E378` message ("the binding is static,
+  not mutable"); only the const path names the one-set rule.
+- The interpreter tracks the state per frame in a name set, cleared on
+  re-declaration. Module units are backstopped through it (verified with
+  a required module whose function sets a const twice: the interpreter
+  reports `E378` with the one-set message).
+- A `set` on a const inside a loop passes the checker (one static set)
+  and fails at runtime on the second iteration, consistent with "set
+  once at runtime" (verified with a list loop).
+- The first set follows the mutable rules end to end: coercion, the old
+  value's drop, and the released borrow all reuse the existing `set`
+  path; no separate const branch exists beyond the allowance check.
+- A const that is never set does not warn (`21_warning_never_written`
+  still passes, and a never-set const probe emits no warning); the
+  static probes (`p09b_static_init`) are unchanged.
 
 ## Stage 8: The documented coercion matrix
 

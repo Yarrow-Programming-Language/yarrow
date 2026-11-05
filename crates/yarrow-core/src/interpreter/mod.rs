@@ -300,6 +300,10 @@ struct Frame {
     /// `mutable` bindings. Names bound outside a declaration (`self` at
     /// call entry, `move` targets) default to `mutable`.
     local_mutability: HashMap<String, Mutability>,
+    /// PLAN 7.1.1: `const` locals that already received their one runtime
+    /// `set`. A second `set` fails with E378; a re-declaration clears the
+    /// entry.
+    const_set: HashSet<String>,
     loops: Vec<LoopCtx>,
     /// `defer` bodies, one entry per active scope (innermost last). Each
     /// scope runs its registered bodies in reverse order at its exit; the
@@ -1640,6 +1644,7 @@ impl Interpreter {
         let mut frame = Frame {
             locals: HashMap::new(),
             local_mutability: HashMap::new(),
+            const_set: HashSet::new(),
             loops: Vec::new(),
             deferred: vec![Vec::new()],
             error_payload: error_payload.clone(),
@@ -2028,6 +2033,9 @@ impl Interpreter {
                 // PLAN 5.1.2: record the declared mutability before anything
                 // else, so the `self` re-binding below carries it too.
                 frame.local_mutability.insert(name.clone(), *mutability);
+                // PLAN 7.1.1: a re-declaration restarts the const one-set
+                // allowance.
+                frame.const_set.remove(name);
                 // Method receiver already bound at call entry.
                 if name == "self" && frame.locals.contains_key("self") {
                     return Ok(Flow::Next);
@@ -2154,27 +2162,38 @@ impl Interpreter {
                 let mut slot = self.pop(stack, stmt.span, "set")?;
                 match target {
                     Expr::Variable { name } => {
-                        // PLAN 5.1.2: `set` is restricted to `mutable`
-                        // bindings; this backstops the checker for paths
-                        // that reach the interpreter unchecked.
+                        // PLAN 7.1.2: a `const` binding accepts exactly one
+                        // runtime `set`; a second `set` and any `set` on a
+                        // `static` binding fail with E378. This backstops
+                        // the checker for module units and the REPL.
                         let mutability = frame
                             .local_mutability
                             .get(name)
                             .copied()
                             .unwrap_or(Mutability::Mutable);
-                        if matches!(mutability, Mutability::Const | Mutability::Static) {
-                            return Err(InterpretError::new(
-                                format!(
-                                    "cannot set '{name}': the binding is {}, not mutable",
-                                    match mutability {
-                                        Mutability::Const => "const",
-                                        Mutability::Static => "static",
-                                        Mutability::Mutable => unreachable!(),
-                                    }
-                                ),
-                                stmt.span,
-                                "E378",
-                            ));
+                        match mutability {
+                            Mutability::Mutable => {}
+                            Mutability::Static => {
+                                return Err(InterpretError::new(
+                                    format!(
+                                        "cannot set '{name}': the binding is static, not mutable"
+                                    ),
+                                    stmt.span,
+                                    "E378",
+                                ));
+                            }
+                            Mutability::Const if frame.const_set.contains(name) => {
+                                return Err(InterpretError::new(
+                                    format!(
+                                        "cannot set '{name}': the const binding already received its one set"
+                                    ),
+                                    stmt.span,
+                                    "E378",
+                                ));
+                            }
+                            Mutability::Const => {
+                                frame.const_set.insert(name.clone());
+                            }
                         }
                         let old = frame.locals.get(name).cloned().ok_or_else(|| {
                             InterpretError::new(

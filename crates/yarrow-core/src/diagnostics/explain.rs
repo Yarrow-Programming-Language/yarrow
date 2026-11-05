@@ -89,12 +89,12 @@ computed at runtime.",
     },
     ExplainEntry {
         code: "E378",
-        title: "set on a const or static binding",
+        title: "set on a static binding, or a second set on a const binding",
         body: "\
-`set` reassigns `mutable` bindings only. A `const` binding is set once at \
-runtime (its initializer) and a `static` binding is a compile-time constant, \
-so neither can be a `set` target. Re-declare the name with `mutable`, or bind \
-a new `mutable` variable for the updated value.",
+`set` reassigns `mutable` bindings. A `const` binding accepts exactly one \
+`set` after its declaration; a second `set` fails. A `static` binding is a \
+compile-time constant and can never be a `set` target. Re-declare the name \
+with `mutable`, or bind a new `mutable` variable for further updates.",
     },
     ExplainEntry {
         code: "E379",
