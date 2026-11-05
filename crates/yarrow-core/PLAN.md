@@ -527,11 +527,26 @@ Recorded implementation decisions (Stage 9):
 - A rune literal holds one Unicode scalar value. The tokenizer counts
   scalar values, not bytes; no layout or runtime change is needed.
 
-- [ ] 9.1.1 Fix the tokenizer's rune-length check to count characters;
+- [x] 9.1.1 Fix the tokenizer's rune-length check to count characters;
   `'é'` tokenizes and evaluates to its code point.
 
 Acceptance: `'é' typeof rune ==` runs; `'a'`, `'\n'`, and `'\''` are
 unchanged; the corpus still passes.
+
+Stage 9 findings, recorded when the stage closed:
+
+- The fix is the length check alone: `content.replace('\\', "").len()`
+  became `.chars().count()`, so the check counts Unicode scalar values
+  after stripping escape backslashes. `decode_rune_literal` already
+  decoded by scalar value and rune storage was already a 4-byte code
+  point, so no other layer changed.
+- Verified with probes in `/tmp/yarrow-audit4/`: `'é'` (U+00E9), `'€'`
+  (U+20AC), and `'中'` (U+4E2D) all tokenize, report `typeof rune`, and
+  compare equal to themselves and not to `'a'`; `'a'`, `'\n'`, and
+  `'\''` are unchanged; `'ab'` still fails with `E133`.
+- A rune-to-integer comparison (`'é' 233 ==`) is `E311` (family
+  mismatch), the pre-existing rule for every rune literal; the code
+  point is observable through rune equality, not integer comparison.
 
 ## Stage 10: Diagnostic quality
 

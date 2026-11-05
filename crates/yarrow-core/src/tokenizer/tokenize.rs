@@ -339,7 +339,7 @@ impl Tokenizer {
         self.advance();
 
         let content = &self.source[self.start + 1..self.current - 1];
-        if content.replace('\\', "").len() > 1 {
+        if content.replace('\\', "").chars().count() > 1 {
             return Err(TokenizeError::new(
                 "rune literals must contain exactly one character or escape sequence".to_string(),
                 self.get_location(),
