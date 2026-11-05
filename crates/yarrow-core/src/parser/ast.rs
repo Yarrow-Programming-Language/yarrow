@@ -338,12 +338,18 @@ pub struct EnumDecl {
     /// Optional underlying type (`Name i32 enum`); default is `i32`.
     pub underlying: Option<Type>,
     pub members: Vec<EnumMember>,
+    /// `Name public enum`: nameable by importers (PLAN 4.1.1). Default
+    /// visibility is private.
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnionDecl {
     pub name: String,
     pub types: Vec<Type>,
+    /// `Name public union`: nameable by importers (PLAN 4.1.1). Default
+    /// visibility is private.
+    pub visibility: Option<Visibility>,
 }
 
 /// `Name [QualifiedName] error { member } end`
@@ -353,6 +359,9 @@ pub struct ErrorDecl {
     /// Optional injected error type (`MyErr error.Error error … end`).
     pub inject: Option<String>,
     pub members: Vec<String>,
+    /// `Name public error`: nameable by importers (PLAN 4.1.1). Default
+    /// visibility is private.
+    pub visibility: Option<Visibility>,
 }
 
 /// The condition of a `match` case. Either a boolean expression evaluated

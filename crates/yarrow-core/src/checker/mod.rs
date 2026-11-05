@@ -826,6 +826,14 @@ impl Checker {
     /// slots (literals, module calls), so the binding check skips them.
     /// A reference resolves to its pointee so method receivers type-check
     /// against `reference<T>` parameters.
+    ///
+    /// PLAN 4.2.2: a module-qualified name (`m.Point`) resolves the same
+    /// way a qualified call does: when the first segment names a visible
+    /// `require` alias the type is a module type and stays opaque (module
+    /// contents are not visible here; the interpreter validates the name
+    /// and the type's visibility after loading). Module units stay opaque
+    /// as today, so type privacy (PLAN 4.1.2, `E398`) is enforced by the
+    /// interpreter for every cross-unit use.
     fn resolve_type(&self, ty: &Type) -> Ty {
         match &ty.kind {
             TypeKind::Primitive(p) => primitive_to_kind(*p).map(Ty::Prim).unwrap_or(Ty::Opaque),

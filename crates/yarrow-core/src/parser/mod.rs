@@ -241,7 +241,7 @@ impl Parser {
             TokenKind::Enum => {
                 let (name, underlying, stack_span) = self.pop_enum_head(ops, op_spans)?;
                 let start = self.peek_span();
-                let decl = self.parse_enum(name, underlying)?;
+                let decl = self.parse_enum(name, underlying, None)?;
                 let end = self.prev_span();
                 let span = stack_span.merge(start).merge(end);
                 stmts.push(Stmt::new(StmtKind::Enum(decl), span));
@@ -250,7 +250,7 @@ impl Parser {
             TokenKind::Union => {
                 let (name, stack_span) = self.pop_name(ops, op_spans)?;
                 let start = self.peek_span();
-                let decl = self.parse_union(name)?;
+                let decl = self.parse_union(name, None)?;
                 let end = self.prev_span();
                 let span = stack_span.merge(start).merge(end);
                 stmts.push(Stmt::new(StmtKind::Union(decl), span));
@@ -269,7 +269,7 @@ impl Parser {
                     }
                     _ => {
                         let start = self.peek_span();
-                        let (decl, stack_span) = self.parse_error_decl(ops, op_spans)?;
+                        let (decl, stack_span) = self.parse_error_decl(ops, op_spans, None)?;
                         let end = self.prev_span();
                         let span = stack_span.merge(start).merge(end);
                         stmts.push(Stmt::new(StmtKind::Error(decl), span));
@@ -761,7 +761,12 @@ impl Parser {
         })
     }
 
-    fn parse_enum(&mut self, name: String, underlying: Option<Type>) -> ParseResult<EnumDecl> {
+    fn parse_enum(
+        &mut self,
+        name: String,
+        underlying: Option<Type>,
+        visibility: Option<Visibility>,
+    ) -> ParseResult<EnumDecl> {
         self.expect(TokenKind::Enum, "expected 'enum'")?;
 
         let mut members = Vec::new();
@@ -788,6 +793,7 @@ impl Parser {
             name,
             underlying,
             members,
+            visibility,
         })
     }
 
@@ -795,6 +801,7 @@ impl Parser {
         &mut self,
         ops: &mut Vec<Expr>,
         op_spans: &mut Vec<Span>,
+        visibility: Option<Visibility>,
     ) -> ParseResult<(ErrorDecl, Span)> {
         let location = self.peek_location();
         self.expect(TokenKind::Error, "expected 'error'")?;
@@ -831,12 +838,17 @@ impl Parser {
                 name,
                 inject,
                 members,
+                visibility,
             },
             head_span,
         ))
     }
 
-    fn parse_union(&mut self, name: String) -> ParseResult<UnionDecl> {
+    fn parse_union(
+        &mut self,
+        name: String,
+        visibility: Option<Visibility>,
+    ) -> ParseResult<UnionDecl> {
         self.expect(TokenKind::Union, "expected 'union'")?;
 
         let mut types = Vec::new();
@@ -845,7 +857,11 @@ impl Parser {
         }
         self.expect(TokenKind::End, "expected 'end' to close union")?;
 
-        Ok(UnionDecl { name, types })
+        Ok(UnionDecl {
+            name,
+            types,
+            visibility,
+        })
     }
 
     fn parse_implement(&mut self, target: String) -> ParseResult<Implement> {
@@ -1484,8 +1500,37 @@ impl Parser {
                     stack_span.merge(start).merge(end),
                 ))
             }
+            TokenKind::Enum => {
+                let (name, underlying, stack_span) = self.pop_enum_head(ops, op_spans)?;
+                let start = self.peek_span();
+                let decl = self.parse_enum(name, underlying, Some(visibility))?;
+                let end = self.prev_span();
+                Ok(Stmt::new(
+                    StmtKind::Enum(decl),
+                    stack_span.merge(start).merge(end),
+                ))
+            }
+            TokenKind::Union => {
+                let (name, stack_span) = self.pop_name(ops, op_spans)?;
+                let start = self.peek_span();
+                let decl = self.parse_union(name, Some(visibility))?;
+                let end = self.prev_span();
+                Ok(Stmt::new(
+                    StmtKind::Union(decl),
+                    stack_span.merge(start).merge(end),
+                ))
+            }
+            TokenKind::Error => {
+                let start = self.peek_span();
+                let (decl, stack_span) = self.parse_error_decl(ops, op_spans, Some(visibility))?;
+                let end = self.prev_span();
+                Ok(Stmt::new(
+                    StmtKind::Error(decl),
+                    stack_span.merge(start).merge(end),
+                ))
+            }
             _ => Err(ParseError::new(
-                "visibility must precede 'function', 'unsafe function', or 'struct'",
+                "visibility must precede 'function', 'unsafe function', 'struct', 'enum', 'union', or 'error'",
                 self.peek_location(),
                 "E233",
             )),

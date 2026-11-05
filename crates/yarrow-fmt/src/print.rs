@@ -580,6 +580,10 @@ impl<'a> Printer<'a> {
             self.out.push(' ');
             self.out.push_str(&format_type(ty));
         }
+        if let Some(vis) = decl.visibility {
+            self.out.push(' ');
+            self.out.push_str(visibility_word(vis));
+        }
         self.out.push_str(" enum");
         self.finish_line();
 
@@ -604,6 +608,10 @@ impl<'a> Printer<'a> {
         self.flush_pending_blank();
         self.write_indent();
         self.out.push_str(&decl.name);
+        if let Some(vis) = decl.visibility {
+            self.out.push(' ');
+            self.out.push_str(visibility_word(vis));
+        }
         self.out.push_str(" union");
         self.finish_line();
 
@@ -627,6 +635,10 @@ impl<'a> Printer<'a> {
         if let Some(inject) = &decl.inject {
             self.out.push(' ');
             self.out.push_str(inject);
+        }
+        if let Some(vis) = decl.visibility {
+            self.out.push(' ');
+            self.out.push_str(visibility_word(vis));
         }
         self.out.push_str(" error");
         self.finish_line();

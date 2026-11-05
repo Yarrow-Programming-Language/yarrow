@@ -261,6 +261,17 @@ field `public` in the declaring module, or move the access into that module \
 (for example a method on the struct).",
     },
     ExplainEntry {
+        code: "E398",
+        title: "private type used from another unit",
+        body: "\
+A type (struct, enum, union, or error type) is private unless it is declared \
+`public`, and a private type is only nameable inside the unit that declares \
+it: private top-level entities stay file-local and are not exported. The \
+use sites are binding declarations, struct/union/enum literals, \
+`Type implement`, `typeof` comparisons, and match type cases. Mark the type \
+`public` in the declaring module, or move the use into that module.",
+    },
+    ExplainEntry {
         code: "E363",
         title: "invalid literal or enum carrier",
         body: "\

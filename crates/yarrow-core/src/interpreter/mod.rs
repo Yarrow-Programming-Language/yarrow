@@ -341,9 +341,14 @@ pub struct Interpreter {
     /// after the main unit, so an inject that targets a module type (e.g.
     /// `error.Error` from std.error) is resolved in `resolve_error_injects`.
     pending_error_injects: Vec<(u32, String)>,
-    /// Declaring unit per registered type, keyed by category and bare name.
-    /// Backs the `E384` duplicate diagnostic (PLAN 2.2).
-    type_units: HashMap<(TypeCategory, String), String>,
+    /// Declaring unit and visibility per registered type, keyed by category
+    /// and bare name. Backs the `E384` duplicate diagnostic (PLAN 2.2) and
+    /// the type-privacy gate (PLAN 4.1).
+    type_units: HashMap<(TypeCategory, String), TypeUnit>,
+    /// `Type implement` targets with their implementing unit (PLAN 4.1.2),
+    /// checked after all units register: a unit may implement a type a
+    /// later-registering module declares.
+    implement_targets: Vec<(String, Option<String>)>,
 }
 
 /// Which registry a type name was declared into. Types register globally by
@@ -354,6 +359,37 @@ enum TypeCategory {
     Enum,
     Union,
     Error,
+}
+
+/// Declaring unit and visibility of one registered type (PLAN 4.1.1),
+/// mirroring what `StructInfo` records per field.
+#[derive(Debug, Clone)]
+struct TypeUnit {
+    /// Human-readable unit label, for the `E384` message.
+    label: String,
+    /// Module path of the declaring unit; `None` is the main unit.
+    module: Option<String>,
+    /// True when declared `public`. Default visibility is private.
+    public: bool,
+}
+
+/// A registered named type resolved for one use site (PLAN 4.2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeRef {
+    Struct(u32),
+    Union(u32),
+    Enum(u32),
+    Error(u32),
+}
+
+/// Why a type name failed to resolve at a use site (PLAN 4.2.1).
+#[derive(Debug, Clone)]
+enum TypeUseError {
+    /// The name resolves to no alias and no registered type (`E340`).
+    Unknown,
+    /// The type is private to another unit: the declaring unit's label
+    /// (`E398`).
+    Private(String),
 }
 
 /// REPL-oriented wrapper around [`Interpreter`] (Stage 13b surface).
@@ -416,6 +452,7 @@ impl Interpreter {
             error_tags: HashMap::new(),
             pending_error_injects: Vec::new(),
             type_units: HashMap::new(),
+            implement_targets: Vec::new(),
         }
     }
 
@@ -452,6 +489,7 @@ impl Interpreter {
         self.error_tags.clear();
         self.pending_error_injects.clear();
         self.type_units.clear();
+        self.implement_targets.clear();
 
         let mut loaded = Vec::new();
         let mut loading = HashSet::new();
@@ -465,6 +503,7 @@ impl Interpreter {
         self.resolve_error_injects()?;
         self.register_module_bindings()?;
         self.validate_error_signatures()?;
+        self.validate_implement_targets()?;
         Ok(())
     }
 
@@ -570,13 +609,12 @@ impl Interpreter {
     }
 
     fn register_unit(&mut self, module: Option<String>, program: &Program) -> IResult<()> {
-        let unit = Self::unit_label(module.as_deref());
         for item in &program.items {
             match &item.kind {
                 StmtKind::Struct(d) => self.register_struct(module.as_deref(), d)?,
-                StmtKind::Enum(d) => self.register_enum(&unit, d)?,
-                StmtKind::Union(d) => self.register_union(&unit, d)?,
-                StmtKind::Error(d) => self.register_error(&unit, d)?,
+                StmtKind::Enum(d) => self.register_enum(module.as_deref(), d)?,
+                StmtKind::Union(d) => self.register_union(module.as_deref(), d)?,
+                StmtKind::Error(d) => self.register_error(module.as_deref(), d)?,
                 StmtKind::Implement(imp) => self.register_implement(module.clone(), imp)?,
                 StmtKind::Function(f) => {
                     // Every function of a module unit registers under its
@@ -606,28 +644,44 @@ impl Interpreter {
     /// Reject a second declaration of a type name in the same category
     /// (PLAN 2.2). Types register globally by bare name, so the later unit
     /// is always the one blamed; registration order (main unit first, then
-    /// modules in require order) guarantees that.
+    /// modules in require order) guarantees that. PLAN 4.1.1: the declaring
+    /// unit and visibility are recorded for the privacy gate.
     fn check_type_duplicate(
         &mut self,
         category: TypeCategory,
         name: &str,
-        unit: &str,
+        module: Option<&str>,
+        public: bool,
     ) -> IResult<()> {
         if let Some(first) = self.type_units.get(&(category, name.to_string())) {
             return Err(InterpretError::new(
-                format!("duplicate type '{name}': declared by {first}, redeclared by {unit}"),
+                format!(
+                    "duplicate type '{name}': declared by {}, redeclared by {}",
+                    first.label,
+                    Self::unit_label(module)
+                ),
                 Span::default(),
                 "E384",
             ));
         }
-        self.type_units
-            .insert((category, name.to_string()), unit.to_string());
+        self.type_units.insert(
+            (category, name.to_string()),
+            TypeUnit {
+                label: Self::unit_label(module),
+                module: module.map(str::to_string),
+                public,
+            },
+        );
         Ok(())
     }
 
     fn register_struct(&mut self, module: Option<&str>, d: &StructDecl) -> IResult<()> {
-        let unit = Self::unit_label(module);
-        self.check_type_duplicate(TypeCategory::Struct, &d.name, &unit)?;
+        self.check_type_duplicate(
+            TypeCategory::Struct,
+            &d.name,
+            module,
+            matches!(d.visibility, Some(Visibility::Public)),
+        )?;
         let id = self.structs.len() as u32;
         self.struct_ids.insert(d.name.clone(), id);
         let mut fields = Vec::new();
@@ -729,8 +783,13 @@ impl Interpreter {
         }
     }
 
-    fn register_enum(&mut self, unit: &str, d: &EnumDecl) -> IResult<()> {
-        self.check_type_duplicate(TypeCategory::Enum, &d.name, unit)?;
+    fn register_enum(&mut self, module: Option<&str>, d: &EnumDecl) -> IResult<()> {
+        self.check_type_duplicate(
+            TypeCategory::Enum,
+            &d.name,
+            module,
+            matches!(d.visibility, Some(Visibility::Public)),
+        )?;
         // Carrier story: integer carriers keep discriminants of that width
         // (range-checked below); a string carrier stores one interned heap
         // string per member (PLAN 3.2). Any other carrier is rejected with
@@ -836,8 +895,13 @@ impl Interpreter {
             })
     }
 
-    fn register_union(&mut self, unit: &str, d: &UnionDecl) -> IResult<()> {
-        self.check_type_duplicate(TypeCategory::Union, &d.name, unit)?;
+    fn register_union(&mut self, module: Option<&str>, d: &UnionDecl) -> IResult<()> {
+        self.check_type_duplicate(
+            TypeCategory::Union,
+            &d.name,
+            module,
+            matches!(d.visibility, Some(Visibility::Public)),
+        )?;
         let id = self.unions.len() as u32;
         self.union_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
@@ -909,8 +973,13 @@ impl Interpreter {
         }
     }
 
-    fn register_error(&mut self, unit: &str, d: &ErrorDecl) -> IResult<()> {
-        self.check_type_duplicate(TypeCategory::Error, &d.name, unit)?;
+    fn register_error(&mut self, module: Option<&str>, d: &ErrorDecl) -> IResult<()> {
+        self.check_type_duplicate(
+            TypeCategory::Error,
+            &d.name,
+            module,
+            matches!(d.visibility, Some(Visibility::Public)),
+        )?;
         let id = self.error_types.len() as u32;
         self.error_type_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
@@ -1009,6 +1078,10 @@ impl Interpreter {
     }
 
     fn register_implement(&mut self, module: Option<String>, imp: &Implement) -> IResult<()> {
+        // PLAN 4.1.2: the target type must be visible from this unit; the
+        // check runs after all units register (`validate_implement_targets`).
+        self.implement_targets
+            .push((imp.target.clone(), module.clone()));
         for f in &imp.functions {
             let short = format!("{}::{}", imp.target, f.name);
             let fq = match &module {
@@ -1725,14 +1798,17 @@ impl Interpreter {
                 if name == "self" && frame.locals.contains_key("self") {
                     return Ok(Flow::Next);
                 }
-                let kind = self.type_kind_code(ty).ok_or_else(|| {
-                    InterpretError::unsupported(format!("binding type {ty:?}"), stmt.span)
-                })?;
+                // PLAN 4.2.1: the declared type resolves with the privacy
+                // gate; a module-qualified name binds through the alias
+                // tables.
+                let kind = self.binding_type_kind(ty, module, &frame.local_aliases, stmt.span)?;
                 let mut slot = match value {
                     Some(Expr::StructLit(pairs)) => {
                         self.eval_struct_lit(pairs, ty, stack, frame, module, caller_fq, stmt.span)?
                     }
-                    Some(Expr::EmptyMapOrStruct) => self.eval_empty_aggregate(ty, stmt.span)?,
+                    Some(Expr::EmptyMapOrStruct) => {
+                        self.eval_empty_aggregate(ty, module, &frame.local_aliases, stmt.span)?
+                    }
                     Some(Expr::List(elems)) => {
                         self.eval_list_lit(elems, ty, stack, frame, module, caller_fq, stmt.span)?
                     }
@@ -1742,7 +1818,7 @@ impl Interpreter {
                     Some(Expr::Array(elems)) if elems.is_empty() => {
                         // PLAN 2.1.1: the declared array type is the typed
                         // context an empty `[]` needs.
-                        self.eval_empty_array(ty, stmt.span)?
+                        self.eval_empty_array(ty, module, &frame.local_aliases, stmt.span)?
                     }
                     Some(Expr::Seq(elems)) => {
                         // Prior words are side effects; trailing literal is the value.
@@ -1761,7 +1837,12 @@ impl Interpreter {
                             Expr::StructLit(pairs) => self.eval_struct_lit(
                                 pairs, ty, stack, frame, module, caller_fq, *last_span,
                             )?,
-                            Expr::EmptyMapOrStruct => self.eval_empty_aggregate(ty, *last_span)?,
+                            Expr::EmptyMapOrStruct => self.eval_empty_aggregate(
+                                ty,
+                                module,
+                                &frame.local_aliases,
+                                *last_span,
+                            )?,
                             Expr::List(elems) => self.eval_list_lit(
                                 elems, ty, stack, frame, module, caller_fq, *last_span,
                             )?,
@@ -1771,12 +1852,18 @@ impl Interpreter {
                             Expr::Array(elems) if elems.is_empty() => {
                                 // PLAN 2.1.1: trailing empty `[]` of the
                                 // initializer; the declared type types it.
-                                self.eval_empty_array(ty, *last_span)?
+                                self.eval_empty_array(ty, module, &frame.local_aliases, *last_span)?
                             }
                             other => {
                                 self.eval_expr(other, stack, frame, module, caller_fq, *last_span)?;
                                 let mut s = self.pop(stack, stmt.span, "value")?;
-                                s = self.coerce_to_binding(s, ty, stmt.span)?;
+                                s = self.coerce_to_binding(
+                                    s,
+                                    ty,
+                                    module,
+                                    &frame.local_aliases,
+                                    stmt.span,
+                                )?;
                                 s.kind = kind;
                                 s
                             }
@@ -1785,13 +1872,15 @@ impl Interpreter {
                     Some(e) => {
                         self.eval_expr(e, stack, frame, module, caller_fq, stmt.span)?;
                         let mut s = self.pop(stack, stmt.span, "value")?;
-                        s = self.coerce_to_binding(s, ty, stmt.span)?;
+                        s =
+                            self.coerce_to_binding(s, ty, module, &frame.local_aliases, stmt.span)?;
                         s.kind = kind;
                         s
                     }
                     None => {
                         let mut s = self.pop(stack, stmt.span, "value")?;
-                        s = self.coerce_to_binding(s, ty, stmt.span)?;
+                        s =
+                            self.coerce_to_binding(s, ty, module, &frame.local_aliases, stmt.span)?;
                         s.kind = kind;
                         s
                     }
@@ -2075,6 +2164,9 @@ impl Interpreter {
                     }
                 }
                 MatchCaseKind::Type(ty) => {
+                    // PLAN 4.1.2: the case names a type; it must be visible
+                    // from this unit.
+                    self.check_match_case_type(ty, module, &frame.local_aliases, span)?;
                     // Error member case (`AppError.NOT_FOUND case`) or union member.
                     if let Some(tag) = self.error_member_tag(ty) {
                         let subject = stack.get(sub_len.saturating_sub(1)).ok_or_else(|| {
@@ -2597,18 +2689,31 @@ impl Interpreter {
                 let Some(local) = frame.locals.get(name) else {
                     // A bare name with no local binding but a registered type
                     // is a type value (e.g. the `Point` in `p typeof Point ==`).
-                    if let Some(kind) = self.named_type_kind_code(name) {
-                        stack.push(Slot {
-                            value: Value::Int(kind as i64),
-                            kind: 4,
-                        });
-                        return Ok(());
+                    // PLAN 4.1.2: a private type of another unit is E398;
+                    // an unknown name keeps the variable diagnostic.
+                    match self.use_type_kind_code(name, module, &frame.local_aliases) {
+                        Ok(kind) => {
+                            stack.push(Slot {
+                                value: Value::Int(kind as i64),
+                                kind: 4,
+                            });
+                            return Ok(());
+                        }
+                        Err(TypeUseError::Private(unit)) => {
+                            return Err(Self::type_use_err(
+                                name,
+                                TypeUseError::Private(unit),
+                                span,
+                            ));
+                        }
+                        Err(TypeUseError::Unknown) => {
+                            return Err(InterpretError::new(
+                                format!("unknown variable '{name}'"),
+                                span,
+                                "E320",
+                            ));
+                        }
                     }
-                    return Err(InterpretError::new(
-                        format!("unknown variable '{name}'"),
-                        span,
-                        "E320",
-                    ));
                 };
                 stack.push(Slot {
                     value: local.value.clone_for_stack(),
@@ -2703,6 +2808,10 @@ impl Interpreter {
                         .and_then(|id| self.error_types.get(*id as usize))
                         .and_then(|(_, ms)| ms.iter().find(|(n, _)| n == member).map(|(_, t)| *t))
                     {
+                        // PLAN 4.1.2: the error type must be visible from
+                        // this unit.
+                        self.check_type_visible(TypeCategory::Error, name, module)
+                            .map_err(|e| Self::type_use_err(name, e, span))?;
                         stack.push(Slot {
                             value: Value::Int(i64::from(tag)),
                             kind: KIND_ERROR,
@@ -2710,6 +2819,10 @@ impl Interpreter {
                         return Ok(());
                     }
                     if let Some(v) = self.enum_members.get(&(name.clone(), member.clone())) {
+                        // PLAN 4.1.2: the enum type must be visible from
+                        // this unit.
+                        self.check_type_visible(TypeCategory::Enum, name, module)
+                            .map_err(|e| Self::type_use_err(name, e, span))?;
                         // PLAN 3.1: the slot's kind identifies the enum, not
                         // the carrier; the stored bits stay the discriminant.
                         let kind = self
@@ -2740,6 +2853,10 @@ impl Interpreter {
                                 "E320",
                             )
                         })?;
+                        // PLAN 4.1.2: the enum type must be visible from
+                        // this unit.
+                        self.check_type_visible(TypeCategory::Enum, name, module)
+                            .map_err(|e| Self::type_use_err(name, e, span))?;
                         let handle = runtime::yarrow_value_clone(interned, KIND_STRING);
                         stack.push(Slot {
                             value: Value::Str {
@@ -2747,6 +2864,29 @@ impl Interpreter {
                                 owned: true,
                             },
                             kind: KIND_ENUM | ((id as u64) << 8),
+                        });
+                        return Ok(());
+                    }
+                    // PLAN 4.2.1: `m.Point` as a type value (e.g. the
+                    // `m.Point` in `p typeof m.Point ==`): the base names a
+                    // visible alias and the member names a type its module
+                    // declares. Privacy applies (PLAN 4.1.2).
+                    if let Some(path) = frame
+                        .local_aliases
+                        .get(name)
+                        .or_else(|| self.aliases.get(name))
+                        .cloned()
+                        && let Some(category) = self.module_type_decl(&path, member)
+                    {
+                        let r = self.registry_ref(category, member).ok_or_else(|| {
+                            Self::type_use_err(member, TypeUseError::Unknown, span)
+                        })?;
+                        self.check_type_visible(category, member, module)
+                            .map_err(|e| Self::type_use_err(member, e, span))?;
+                        let kind = Self::type_ref_kind_code(r);
+                        stack.push(Slot {
+                            value: Value::Int(kind as i64),
+                            kind: 4,
                         });
                         return Ok(());
                     }
@@ -4728,10 +4868,19 @@ impl Interpreter {
                 ));
             }
         };
-        let sid = *self
-            .struct_ids
-            .get(name)
-            .ok_or_else(|| InterpretError::new(format!("unknown struct '{name}'"), span, "E340"))?;
+        // PLAN 4.1.2 / 4.2.1: the named struct resolves with the privacy
+        // gate; a module-qualified name resolves through the alias tables.
+        let sid = match self.resolve_type_use(name, module, &frame.local_aliases) {
+            Ok(TypeRef::Struct(sid)) => sid,
+            Ok(_) => {
+                return Err(InterpretError::new(
+                    format!("'{name}' is not a struct type"),
+                    span,
+                    "E340",
+                ));
+            }
+            Err(e) => return Err(Self::type_use_err(name, e, span)),
+        };
         let info = self.structs[sid as usize].clone();
         let handle = runtime::yarrow_alloc(u64::from(info.size));
         unsafe {
@@ -4774,22 +4923,34 @@ impl Interpreter {
         })
     }
 
-    fn eval_empty_aggregate(&self, ty: &Type, span: Span) -> IResult<Slot> {
+    fn eval_empty_aggregate(
+        &self,
+        ty: &Type,
+        module: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<Slot> {
         match &ty.kind {
             TypeKind::Named(n) => {
-                if let Some(sid) = self.struct_ids.get(n) {
-                    let size = self.structs[*sid as usize].size;
-                    let handle = runtime::yarrow_alloc(u64::from(size));
-                    unsafe {
-                        std::ptr::write_bytes(handle as *mut u8, 0, size as usize);
+                // PLAN 4.1.2 / 4.2.1: the struct behind an empty `{}`
+                // resolves with the privacy gate.
+                match self.resolve_type_use(n, module, local_aliases) {
+                    Ok(TypeRef::Struct(sid)) => {
+                        let size = self.structs[sid as usize].size;
+                        let handle = runtime::yarrow_alloc(u64::from(size));
+                        unsafe {
+                            std::ptr::write_bytes(handle as *mut u8, 0, size as usize);
+                        }
+                        return Ok(Slot {
+                            value: Value::Heap {
+                                handle,
+                                owned: true,
+                            },
+                            kind: KIND_STRUCT | ((sid as u64) << 8),
+                        });
                     }
-                    return Ok(Slot {
-                        value: Value::Heap {
-                            handle,
-                            owned: true,
-                        },
-                        kind: KIND_STRUCT | ((*sid as u64) << 8),
-                    });
+                    Ok(_) => {}
+                    Err(e) => return Err(Self::type_use_err(n, e, span)),
                 }
                 Err(InterpretError::unsupported(
                     format!("empty `{{}}` for type '{n}'"),
@@ -4830,12 +4991,16 @@ impl Interpreter {
     /// PLAN 2.1.1: an empty `[]` evaluates only in a typed binding
     /// context; the declared `array<T N>` supplies the element kind (and
     /// the size, which `array<T>` without `N` still rejects via E381).
-    fn eval_empty_array(&self, ty: &Type, span: Span) -> IResult<Slot> {
+    fn eval_empty_array(
+        &self,
+        ty: &Type,
+        module: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<Slot> {
         match &ty.kind {
             TypeKind::Array { element, size } => {
-                let ek = self.type_kind_code(element).ok_or_else(|| {
-                    InterpretError::unsupported(format!("binding type {ty:?}"), span)
-                })?;
+                let ek = self.binding_type_kind(element, module, local_aliases, span)?;
                 let count = size.unwrap_or(0);
                 Ok(Slot {
                     value: Value::Array(Vec::new()),
@@ -4941,11 +5106,22 @@ impl Interpreter {
         })
     }
 
-    fn coerce_to_binding(&mut self, slot: Slot, ty: &Type, span: Span) -> IResult<Slot> {
-        if let TypeKind::Named(n) = &ty.kind
-            && let Some(uid) = self.union_ids.get(n).copied()
-        {
-            return self.wrap_union_value(slot, uid, span);
+    fn coerce_to_binding(
+        &mut self,
+        slot: Slot,
+        ty: &Type,
+        module: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<Slot> {
+        // PLAN 4.1.2 / 4.2.1: a union binding wraps its initializer; the
+        // union type resolves with the privacy gate.
+        if let TypeKind::Named(n) = &ty.kind {
+            match self.resolve_type_use(n, module, local_aliases) {
+                Ok(TypeRef::Union(uid)) => return self.wrap_union_value(slot, uid, span),
+                Ok(_) => {}
+                Err(e) => return Err(Self::type_use_err(n, e, span)),
+            }
         }
         Ok(slot)
     }
@@ -5001,33 +5177,6 @@ impl Interpreter {
         })
     }
 
-    fn type_kind_code(&self, ty: &Type) -> Option<u64> {
-        match &ty.kind {
-            TypeKind::Primitive(p) => primitive_to_kind(*p),
-            TypeKind::Array { element, size } => {
-                let elem = self.type_kind_code(element)?;
-                let count = size.unwrap_or(0);
-                Some(0x60 | (elem << 8) | (count << 40))
-            }
-            TypeKind::List { element } => {
-                let elem = self.type_kind_code(element)?;
-                Some(KIND_LIST | (elem << 8))
-            }
-            TypeKind::Hashmap { key, value } => {
-                let k = self.type_kind_code(key)?;
-                let v = self.type_kind_code(value)?;
-                Some(KIND_MAP | (k << 8) | (v << 40))
-            }
-            TypeKind::Reference { inner } => self.type_kind_code(inner),
-            TypeKind::Pointer { inner } => {
-                let pk = self.type_kind_code(inner)?;
-                Some(KIND_PTR | (pk << 8))
-            }
-            TypeKind::Named(name) => self.named_type_kind_code(name),
-            TypeKind::Union(_) => Some(KIND_ERROR), // fallible binding rare
-        }
-    }
-
     /// Kind code for a name that may be a primitive or a registered named
     /// type (struct, union, enum, error type).
     fn named_type_kind_code(&self, name: &str) -> Option<u64> {
@@ -5049,6 +5198,219 @@ impl Interpreter {
             return Some(KIND_ERROR);
         }
         None
+    }
+
+    /// Runtime kind code of a resolved type (PLAN 4.2.1).
+    fn type_ref_kind_code(r: TypeRef) -> u64 {
+        match r {
+            TypeRef::Struct(id) => KIND_STRUCT | ((id as u64) << 8),
+            TypeRef::Union(id) => KIND_UNION | ((id as u64) << 8),
+            TypeRef::Enum(id) => KIND_ENUM | ((id as u64) << 8),
+            TypeRef::Error(_) => KIND_ERROR,
+        }
+    }
+
+    /// The registered type behind a bare name, mirroring the lookup order
+    /// of `named_type_kind_code` (PLAN 4.2.1).
+    fn registry_find(&self, name: &str) -> Option<(TypeCategory, TypeRef)> {
+        if let Some(id) = self.struct_ids.get(name) {
+            return Some((TypeCategory::Struct, TypeRef::Struct(*id)));
+        }
+        if let Some(id) = self.union_ids.get(name) {
+            return Some((TypeCategory::Union, TypeRef::Union(*id)));
+        }
+        if let Some(id) = self.enum_ids.get(name) {
+            return Some((TypeCategory::Enum, TypeRef::Enum(*id)));
+        }
+        if let Some(id) = self.error_type_ids.get(name) {
+            return Some((TypeCategory::Error, TypeRef::Error(*id)));
+        }
+        None
+    }
+
+    /// The registered id of a bare name in one category (PLAN 4.2.1).
+    fn registry_ref(&self, category: TypeCategory, name: &str) -> Option<TypeRef> {
+        match category {
+            TypeCategory::Struct => self.struct_ids.get(name).map(|id| TypeRef::Struct(*id)),
+            TypeCategory::Union => self.union_ids.get(name).map(|id| TypeRef::Union(*id)),
+            TypeCategory::Enum => self.enum_ids.get(name).map(|id| TypeRef::Enum(*id)),
+            TypeCategory::Error => self.error_type_ids.get(name).map(|id| TypeRef::Error(*id)),
+        }
+    }
+
+    /// The declaration of `name` in module `path`, if that module declares
+    /// it: its category (PLAN 4.2.1). The first matching declaration in
+    /// file order wins, keeping the resolution deterministic.
+    fn module_type_decl(&self, path: &str, name: &str) -> Option<TypeCategory> {
+        let module = self.modules.iter().find(|m| m.path == path)?;
+        for item in &module.program.items {
+            match &item.kind {
+                StmtKind::Struct(d) if d.name == name => return Some(TypeCategory::Struct),
+                StmtKind::Enum(d) if d.name == name => return Some(TypeCategory::Enum),
+                StmtKind::Union(d) if d.name == name => return Some(TypeCategory::Union),
+                StmtKind::Error(d) if d.name == name => return Some(TypeCategory::Error),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// PLAN 4.1.2: the type-privacy gate. A private type is nameable only
+    /// inside its own unit; same-unit use stays legal.
+    fn check_type_visible(
+        &self,
+        category: TypeCategory,
+        name: &str,
+        current: Option<&str>,
+    ) -> Result<(), TypeUseError> {
+        let Some(unit) = self.type_units.get(&(category, name.to_string())) else {
+            return Ok(());
+        };
+        if !unit.public && unit.module.as_deref() != current {
+            return Err(TypeUseError::Private(unit.label.clone()));
+        }
+        Ok(())
+    }
+
+    /// PLAN 4.2.1: resolve a type name for a use in `current` unit. Bare
+    /// names resolve through the global registry (types are globally unique
+    /// by bare name, so the name may belong to another unit; the privacy
+    /// gate still applies). Qualified names (`m.Point`) resolve through the
+    /// alias tables (the frame's local aliases first, then the global ones)
+    /// to the module's declaration: a name that resolves to no alias, or
+    /// whose alias holds no such type, is `Unknown`.
+    fn resolve_type_use(
+        &self,
+        name: &str,
+        current: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+    ) -> Result<TypeRef, TypeUseError> {
+        if let Some((alias, member)) = name.split_once('.') {
+            let path = local_aliases
+                .get(alias)
+                .or_else(|| self.aliases.get(alias))
+                .ok_or(TypeUseError::Unknown)?;
+            let category = self
+                .module_type_decl(path, member)
+                .ok_or(TypeUseError::Unknown)?;
+            let r = self
+                .registry_ref(category, member)
+                .ok_or(TypeUseError::Unknown)?;
+            self.check_type_visible(category, member, current)?;
+            return Ok(r);
+        }
+        let (category, r) = self.registry_find(name).ok_or(TypeUseError::Unknown)?;
+        self.check_type_visible(category, name, current)?;
+        Ok(r)
+    }
+
+    /// PLAN 4.1.2 / 4.2.1: kind code of a named type at a use site. A
+    /// primitive name keeps its direct kind code; everything else resolves
+    /// through `resolve_type_use` with the privacy gate.
+    fn use_type_kind_code(
+        &self,
+        name: &str,
+        current: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+    ) -> Result<u64, TypeUseError> {
+        if let Some(k) = primitive_kind_code(name) {
+            return Ok(k);
+        }
+        self.resolve_type_use(name, current, local_aliases)
+            .map(Self::type_ref_kind_code)
+    }
+
+    /// InterpretError for a failed type use (PLAN 4.2.1): `E340` for an
+    /// unknown name, `E398` for a private type of another unit.
+    fn type_use_err(name: &str, err: TypeUseError, span: Span) -> InterpretError {
+        match err {
+            TypeUseError::Unknown => {
+                InterpretError::new(format!("unknown type '{name}'"), span, "E340")
+            }
+            TypeUseError::Private(unit) => {
+                InterpretError::new(format!("type '{name}' is private to {unit}"), span, "E398")
+            }
+        }
+    }
+
+    /// PLAN 4.1.2: a match type case names a type (an error type member
+    /// like `AppError.NOT_FOUND case`, or a union member type like
+    /// `Point case`); the named type must be visible from `current`. A name
+    /// that resolves to nothing keeps the existing no-match behavior (the
+    /// case simply never fires).
+    fn check_match_case_type(
+        &self,
+        ty: &Type,
+        current: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<()> {
+        let name = match &ty.kind {
+            TypeKind::Named(n) => n.as_str(),
+            TypeKind::Reference { inner } => match &inner.kind {
+                TypeKind::Named(n) => n.as_str(),
+                _ => return Ok(()),
+            },
+            _ => return Ok(()),
+        };
+        // Error member case: `Type.MEMBER` with a registered error type.
+        if let Some((type_name, _)) = name.rsplit_once('.')
+            && self.error_type_ids.contains_key(type_name)
+        {
+            return self
+                .check_type_visible(TypeCategory::Error, type_name, current)
+                .map_err(|e| Self::type_use_err(type_name, e, span));
+        }
+        // Union member case (bare or module-qualified type name).
+        match self.resolve_type_use(name, current, local_aliases) {
+            Ok(_) => Ok(()),
+            Err(TypeUseError::Private(unit)) => {
+                Err(Self::type_use_err(name, TypeUseError::Private(unit), span))
+            }
+            Err(TypeUseError::Unknown) => Ok(()),
+        }
+    }
+
+    /// PLAN 4.2.1: kind code of a binding's declared type. Named leaves
+    /// resolve through `use_type_kind_code`, so qualified names bind and
+    /// the privacy gate applies; unknown names are `E340` (replacing the
+    /// old `E393` binding rejection).
+    fn binding_type_kind(
+        &self,
+        ty: &Type,
+        current: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<u64> {
+        match &ty.kind {
+            TypeKind::Primitive(p) => primitive_to_kind(*p)
+                .ok_or_else(|| InterpretError::unsupported(format!("binding type {ty:?}"), span)),
+            TypeKind::Array { element, size } => {
+                let elem = self.binding_type_kind(element, current, local_aliases, span)?;
+                let count = size.unwrap_or(0);
+                Ok(0x60 | (elem << 8) | (count << 40))
+            }
+            TypeKind::List { element } => {
+                let elem = self.binding_type_kind(element, current, local_aliases, span)?;
+                Ok(KIND_LIST | (elem << 8))
+            }
+            TypeKind::Hashmap { key, value } => {
+                let k = self.binding_type_kind(key, current, local_aliases, span)?;
+                let v = self.binding_type_kind(value, current, local_aliases, span)?;
+                Ok(KIND_MAP | (k << 8) | (v << 40))
+            }
+            TypeKind::Reference { inner } => {
+                self.binding_type_kind(inner, current, local_aliases, span)
+            }
+            TypeKind::Pointer { inner } => {
+                let pk = self.binding_type_kind(inner, current, local_aliases, span)?;
+                Ok(KIND_PTR | (pk << 8))
+            }
+            TypeKind::Named(name) => self
+                .use_type_kind_code(name, current, local_aliases)
+                .map_err(|e| Self::type_use_err(name, e, span)),
+            TypeKind::Union(_) => Ok(KIND_ERROR), // fallible binding rare
+        }
     }
 
     fn error_member_tag(&self, ty: &Type) -> Option<u32> {
@@ -5351,7 +5713,7 @@ impl Interpreter {
             && self
                 .type_units
                 .get(&(TypeCategory::Error, member.to_string()))
-                == Some(&format!("module '{path}'"))
+                .is_some_and(|u| u.module.as_deref() == Some(path.as_str()))
     }
 
     /// PLAN 4.2 / 4.4: every two-member union return must resolve its
@@ -5387,6 +5749,21 @@ impl Interpreter {
                     span,
                     "E386",
                 ));
+            }
+        }
+        Ok(())
+    }
+    /// PLAN 4.1.2: an `implement` block names its target type, so the
+    /// target must be visible from the implementing unit. Runs after all
+    /// units register, because a unit may implement a type declared by a
+    /// module that registers later. An unregistered target keeps today's
+    /// behavior (the methods register; calls on the type fail elsewhere).
+    fn validate_implement_targets(&self) -> IResult<()> {
+        for (target, module) in &self.implement_targets {
+            if let Some((category, _)) = self.registry_find(target)
+                && let Err(e) = self.check_type_visible(category, target, module.as_deref())
+            {
+                return Err(Self::type_use_err(target, e, Span::default()));
             }
         }
         Ok(())

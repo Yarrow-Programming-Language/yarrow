@@ -4,7 +4,7 @@
 
 "std.error" error require
 
-File struct
+File public struct
 	i64 fd public
 end
 

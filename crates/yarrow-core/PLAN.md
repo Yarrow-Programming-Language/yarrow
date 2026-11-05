@@ -231,22 +231,22 @@ Recorded implementation decisions (Stage 4):
   type, is `E340` (unknown type), not a new code. A resolved but private
   type is the new `E398`.
 
-- [ ] 4.1.1 Record the declaring unit and visibility for every registered
+- [x] 4.1.1 Record the declaring unit and visibility for every registered
   type (struct, enum, union, error), mirroring what `StructInfo` already
   records per field.
-- [ ] 4.1.2 Enforce privacy at the use sites listed above: a private type
+- [x] 4.1.2 Enforce privacy at the use sites listed above: a private type
   used from a different unit fails with `E398`; same-unit use is legal.
   The checker covers the main unit; the interpreter backstops module units.
-- [ ] 4.1.3 Mark `File public struct` in `lib/std/fs.yar` and
+- [x] 4.1.3 Mark `File public struct` in `lib/std/fs.yar` and
   `Error public error` in `lib/std/error.yar`.
-- [ ] 4.2.1 Resolve module-qualified type names (`m.Point`) through the
+- [x] 4.2.1 Resolve module-qualified type names (`m.Point`) through the
   alias/require tables to the module's type, replacing the `E393` binding
   rejection: public types bind, private types fail with `E398`, unknown
   names fail with `E340`.
-- [ ] 4.2.2 The checker resolves qualified type names for the requires it
+- [x] 4.2.2 The checker resolves qualified type names for the requires it
   can see (main unit), the same way it resolves qualified calls; module
   units stay opaque as today.
-- [ ] 4.2.3 Add `E398` to the explain catalog: mark the type `public` in
+- [x] 4.2.3 Add `E398` to the explain catalog: mark the type `public` in
   the declaring module or move the use into that module.
 
 Acceptance: a module's private struct used by bare name from the main unit
