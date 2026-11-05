@@ -161,11 +161,14 @@ impl Session {
         self.require_main_if_needed(&parsed.file, &parsed.program)?;
 
         let mut ctx = EvalContext::new();
-        if let Some(dir) = Path::new(&self.options.source_path).parent()
-            && !dir.as_os_str().is_empty()
-        {
-            ctx.add_module_search_path(dir);
-        }
+        // Audit-3 PLAN 6.2.1: a bare relative source path has an empty
+        // parent directory; search the working directory instead, so
+        // sibling modules resolve from inside the file's directory.
+        let dir = Path::new(&self.options.source_path)
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        ctx.add_module_search_path(dir);
         for p in &self.options.module_search_paths {
             ctx.add_module_search_path(p.clone());
         }

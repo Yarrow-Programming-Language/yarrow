@@ -273,6 +273,16 @@ use sites are binding declarations, struct/union/enum literals, \
 `public` in the declaring module, or move the use into that module.",
     },
     ExplainEntry {
+        code: "E399",
+        title: "unknown alias or module in a call target",
+        body: "\
+The first segment of a qualified call target (`io.write_line call`) is not an \
+alias or module in scope here. A `require` inside a function only binds the \
+alias for that function's body; the same name in another function, or at the \
+top level, does not see it. Require the module in the unit that uses it, or \
+move the call into the function's own scope.",
+    },
+    ExplainEntry {
         code: "E363",
         title: "invalid literal or enum carrier",
         body: "\

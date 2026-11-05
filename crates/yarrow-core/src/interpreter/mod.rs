@@ -3409,6 +3409,26 @@ impl Interpreter {
                         }
                     }
                 }
+                // Audit-3 PLAN 6.1.1: a qualified target whose first
+                // segment is neither a visible alias nor a local names an
+                // unknown alias or module (E399). E393 stays reserved for
+                // targets that are syntactically valid but not yet
+                // supported (a method on a local, a nested member chain).
+                let mut root = base.as_ref();
+                while let Expr::Member { base: inner, .. } = root {
+                    root = inner.as_ref();
+                }
+                if let Expr::Variable { name } = root
+                    && !frame.local_aliases.contains_key(name)
+                    && !self.aliases.contains_key(name)
+                    && !frame.locals.contains_key(name)
+                {
+                    return Err(InterpretError::new(
+                        format!("unknown alias or module '{name}'"),
+                        span,
+                        "E399",
+                    ));
+                }
                 Err(InterpretError::unsupported(
                     "method call / complex call target",
                     span,

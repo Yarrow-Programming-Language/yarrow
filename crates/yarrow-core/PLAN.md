@@ -298,16 +298,16 @@ still runs; the std modules still load.
 
 Two small gaps found by the audit's probes; both are user-reachable today.
 
-- [ ] 6.1.1 Out-of-scope alias: `io.write_line call` in a unit where `io`
+- [x] 6.1.1 Out-of-scope alias: `io.write_line call` in a unit where `io`
   was required inside another function's scope reports `E393` "interpreter
   does not support method call / complex call target yet". The scoping
   behavior is correct; the diagnostic is wrong. Resolve the qualified
   call target against the visible aliases and report the first unknown
   segment with `E399` (unknown alias or module), reserving the `E393`
   fallback for targets that are syntactically valid but not yet supported.
-- [ ] 6.1.2 Add `E399` to the explain catalog: the alias is not in scope
+- [x] 6.1.2 Add `E399` to the explain catalog: the alias is not in scope
   here; require the module in this unit or use the function's own scope.
-- [ ] 6.2.1 Bare relative source path: `Session::interpret_source` adds
+- [x] 6.2.1 Bare relative source path: `Session::interpret_source` adds
   the source file's parent directory as a module search path only when it
   is non-empty, so `yarrow 12_modules.yar` run from inside the file's
   directory resolves no sibling modules (`E380`), while the same file by
