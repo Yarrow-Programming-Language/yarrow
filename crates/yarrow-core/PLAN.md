@@ -279,13 +279,13 @@ Recorded implementation decisions (Stage 5):
   the unsafe builtins (`@alloc` and friends). The `store`/`load` words are
   not gated; the spec does not require it and this plan does not add it.
 
-- [ ] 5.1.1 Remove the function-level `unsafe_depth` increment so an unsafe
+- [x] 5.1.1 Remove the function-level `unsafe_depth` increment so an unsafe
   function's body is not an unsafe context; `E370` fires for unsafe calls
   and unsafe builtins outside an active block, including inside unsafe
   functions.
-- [ ] 5.1.2 Update the `E370` message, help text, and explain entry: drop
+- [x] 5.1.2 Update the `E370` message, help text, and explain entry: drop
   the "mark the enclosing function 'unsafe function'" alternative.
-- [ ] 5.1.3 Mirror the rule in the interpreter's runtime backstop for
+- [x] 5.1.3 Mirror the rule in the interpreter's runtime backstop for
   module units.
 
 Acceptance: `mem.allocate call` directly in an unsafe function's body fails

@@ -33,7 +33,8 @@ fallible-return form, not as general types.",
         body: "\
 Raw pointers, `mem.allocate` / `free` / `load` / `store`, and calls to \
 `unsafe function` need an unsafe context. Wrap the operation in \
-`unsafe ... end`, or mark the enclosing function `unsafe function`.
+`unsafe ... end`. Even inside an `unsafe function`, mark the ops with an \
+unsafe block; the `unsafe` marker only documents the escape.
 
 `unsafe` does not turn off type, stack, ownership, or borrow checking.",
     },

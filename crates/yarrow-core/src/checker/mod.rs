@@ -36,9 +36,11 @@
 //!   runtime stack).
 //!
 //! PLAN 3.5 (unsafe boundary) makes the unsafe escapes visible at check
-//! time. An unsafe context is an `unsafe ... end` block or an `unsafe
-//! function` body; the borrow and ownership rules above stay active inside
-//! it (the unsafe walk uses the same machine):
+//! time. An unsafe context is an active `unsafe ... end` block only: the
+//! `unsafe` marker on a function is declarative, so an unsafe function's
+//! body needs its own block (audit-3 Stage 5); the borrow and ownership
+//! rules above stay active inside it (the unsafe walk uses the same
+//! machine):
 //!
 //! - E370: a call to an `unsafe function` outside an unsafe context.
 //! - E370: an unsafe operation outside an unsafe context: the `@alloc`,
@@ -956,13 +958,10 @@ impl Checker {
             );
         }
 
-        if f.is_unsafe {
-            self.unsafe_depth += 1;
-        }
+        // Audit-3 Stage 5: the `unsafe` marker on a function is declarative
+        // only; its body is not an unsafe context. Unsafe operations need an
+        // active `unsafe ... end` block, also inside unsafe functions.
         self.check_body(&f.body);
-        if f.is_unsafe {
-            self.unsafe_depth -= 1;
-        }
         self.restore_machine(saved);
     }
 
@@ -2328,17 +2327,15 @@ impl Checker {
         }
     }
 
-    /// PLAN 3.5: `what` needs an unsafe context: an `unsafe ... end` block
-    /// or an `unsafe function` body. E370 names both escapes.
+    /// PLAN 3.5 / audit-3 Stage 5: `what` needs an active `unsafe ... end`
+    /// block. An `unsafe function` body is not an unsafe context; the
+    /// marker only documents the escape.
     fn require_unsafe(&mut self, span: Span, what: &str) {
         if self.unsafe_depth == 0 {
             self.emit(
                 Diagnostic::error(
                     CODE_UNSAFE_OUTSIDE,
-                    format!(
-                        "{what} requires an unsafe context: wrap it in 'unsafe ... end' \
-                         or mark the enclosing function 'unsafe function'"
-                    ),
+                    format!("{what} requires an unsafe context: wrap it in 'unsafe ... end'"),
                 )
                 .with_primary(span, ""),
             );

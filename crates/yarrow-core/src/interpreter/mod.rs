@@ -303,6 +303,10 @@ struct Frame {
     local_aliases: HashMap<String, String>,
     local_item_aliases: HashMap<String, String>,
     local_plain_funcs: HashMap<String, String>,
+    /// Active `unsafe ... end` block depth (audit-3 Stage 5). Zero means no
+    /// unsafe context: unsafe calls and the raw memory builtins fail with
+    /// E370. An `unsafe function` body does not count as a context.
+    unsafe_depth: usize,
 }
 
 /// Stack-machine interpreter over a checked AST.
@@ -1421,6 +1425,7 @@ impl Interpreter {
             local_aliases,
             local_item_aliases,
             local_plain_funcs,
+            unsafe_depth: 0,
         };
         if entry.is_method
             && let Some(recv) = local_stack.first()
@@ -2069,8 +2074,13 @@ impl Interpreter {
                 Ok(Flow::Next)
             }
             StmtKind::Unsafe { body } => {
-                // Checker already enforced the unsafe boundary; interpret the body.
-                self.eval_body(body, stack, frame, module, caller_fq)
+                // Audit-3 Stage 5: the block is the only unsafe context, so
+                // track its depth for the E370 backstop; the body itself
+                // interprets like any other block.
+                frame.unsafe_depth += 1;
+                let flow = self.eval_body(body, stack, frame, module, caller_fq);
+                frame.unsafe_depth -= 1;
+                flow
             }
             StmtKind::Move { target, source } => {
                 let taken = match source {
@@ -2973,7 +2983,7 @@ impl Interpreter {
                 self.eval_un(*op, v, stack, span)
             }
             Expr::StackOp(op) => self.eval_stack_op(*op, stack, span),
-            Expr::Builtin { name } => self.eval_builtin(name, stack, span),
+            Expr::Builtin { name } => self.eval_builtin(name, stack, frame, span),
             Expr::Call { target } => self.eval_call(target, stack, frame, module, caller_fq, span),
             Expr::List(elems) => {
                 // PLAN 2.1.1: a bare empty `()` has no element type; only
@@ -3291,6 +3301,21 @@ impl Interpreter {
                 ),
                 span,
                 "E330",
+            ));
+        }
+        // Audit-3 Stage 5: an unsafe function needs an active `unsafe ... end`
+        // block, also when the caller is itself an unsafe function. The
+        // checker covers the main unit; this backstop covers module units
+        // and the REPL.
+        if entry.function.is_unsafe && frame.unsafe_depth == 0 {
+            return Err(InterpretError::new(
+                format!(
+                    "call to unsafe function '{}' requires an unsafe context: \
+                     wrap it in 'unsafe ... end'",
+                    entry.fq
+                ),
+                span,
+                "E370",
             ));
         }
         let n = entry.function.params.len();
@@ -3869,7 +3894,23 @@ impl Interpreter {
             .is_some_and(|p| p == "std.loop")
     }
 
-    fn eval_builtin(&mut self, name: &str, stack: &mut Vec<Slot>, span: Span) -> IResult<()> {
+    fn eval_builtin(
+        &mut self,
+        name: &str,
+        stack: &mut Vec<Slot>,
+        frame: &Frame,
+        span: Span,
+    ) -> IResult<()> {
+        // Audit-3 Stage 5: the raw memory builtins need an active
+        // `unsafe ... end` block (E370 backstop for module units and the
+        // REPL; the checker covers the main unit).
+        if matches!(name, "alloc" | "free" | "load" | "store") && frame.unsafe_depth == 0 {
+            return Err(InterpretError::new(
+                format!("@{name} requires an unsafe context: wrap it in 'unsafe ... end'"),
+                span,
+                "E370",
+            ));
+        }
         match name {
             "print" => {
                 let v = self.pop(stack, span, "@print")?;
