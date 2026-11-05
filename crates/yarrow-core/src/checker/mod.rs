@@ -431,7 +431,8 @@ struct VarInfo {
     is_pointer: bool,
     /// `reference<T>` binding: may hold a live borrow of another value.
     is_reference: bool,
-    /// Named struct type, for method call resolution.
+    /// Named struct, enum, or union type, for method call resolution
+    /// (PLAN 3.1.1: `implement` blocks may target any of the three).
     struct_name: Option<String>,
     /// The declared type (PLAN 6.1): reads push it, and `set` checks
     /// against it (PLAN 6.2).
@@ -880,7 +881,11 @@ impl Checker {
         let is_pointer = matches!(ty.kind, TypeKind::Pointer { .. });
         let is_reference = matches!(ty.kind, TypeKind::Reference { .. });
         let struct_name = match &ty.kind {
-            TypeKind::Named(n) if self.decls.is_struct(n) => Some(n.clone()),
+            TypeKind::Named(n)
+                if self.decls.is_struct(n) || self.decls.is_enum(n) || self.decls.is_union(n) =>
+            {
+                Some(n.clone())
+            }
             _ => None,
         };
         let resolved = self.resolve_type(ty);
@@ -2150,8 +2155,8 @@ impl Checker {
                         self.unknown_call();
                         return;
                     }
-                    // Method on a local struct variable: the receiver is
-                    // the first parameter.
+                    // Method on a local variable of a named struct, enum,
+                    // or union type: the receiver is the first parameter.
                     if let Some(var) = self.lookup_var(name).cloned() {
                         // PLAN 3.2.1: the call reads the receiver.
                         if var.moved {

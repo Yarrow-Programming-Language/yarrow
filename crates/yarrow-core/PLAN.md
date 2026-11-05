@@ -193,14 +193,28 @@ Recorded implementation decisions (Stage 3):
 - Method visibility follows the existing function rules: a private method
   is same-unit only.
 
-- [ ] 3.1.1 Call resolution accepts `KIND_ENUM` and `KIND_UNION`
+- [x] 3.1.1 Call resolution accepts `KIND_ENUM` and `KIND_UNION`
   receivers in the interpreter; the checker mirrors for the main unit.
-- [ ] 3.1.2 p16 and p38 run: an enum method returns through a borrowed
+- [x] 3.1.2 p16 and p38 run: an enum method returns through a borrowed
   receiver, and a union method reads the active payload.
 
 Acceptance: p16 prints `red`; p38 runs; struct methods are unchanged
 (`00_grammar_tour` and `06_structs_and_enums` pass); the corpus still
 passes.
+
+Stage 3 findings, recorded when the stage closed:
+
+- Both probes' method bodies do not read `self`, so the receiver read
+  path was verified with an extra probe: an enum method compares `self`
+  against members with `==` (the discriminant is a copy), and a union
+  method reads the active payload through `self match` arms, exactly like
+  a plain union binding.
+- The checker's `VarInfo::struct_name` (the method-resolution type name)
+  now covers enum and union declarations, not just structs; the
+  `is_method` receiver binding already accepted any named pointee.
+- An unknown method on any receiver (struct, enum, or union) still falls
+  through to `E393` "method call / complex call target"; that is the
+  pre-existing struct behavior, kept for parity.
 
 ## Stage 4: Chained member call targets
 

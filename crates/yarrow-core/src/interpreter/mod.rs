@@ -3652,14 +3652,21 @@ impl Interpreter {
                         return Ok(format!("{path}::{member}"));
                     }
                 }
-                // Method call: resolve from the base variable's struct type.
+                // Method call: resolve from the base variable's type. A
+                // method may live on a struct, enum, or union receiver
+                // (PLAN 3.1.1); the receiver slot's kind names the type.
                 if let Expr::Variable { name } = base.as_ref()
                     && let Some(slot) = frame.locals.get(name)
-                    && (slot.kind & 0xff) == KIND_STRUCT
                 {
-                    let sid = (slot.kind >> 8) as u32;
-                    if let Some(info) = self.structs.get(sid as usize) {
-                        let method = format!("{}::{member}", info.name);
+                    let tid = (slot.kind >> 8) as u32;
+                    let type_name = match slot.kind & 0xff {
+                        KIND_STRUCT => self.structs.get(tid as usize).map(|i| i.name.clone()),
+                        KIND_ENUM => self.enums.get(tid as usize).map(|i| i.name.clone()),
+                        KIND_UNION => self.unions.get(tid as usize).map(|i| i.name.clone()),
+                        _ => None,
+                    };
+                    if let Some(type_name) = type_name {
+                        let method = format!("{type_name}::{member}");
                         if self.funcs.contains_key(&method) {
                             return Ok(method);
                         }
