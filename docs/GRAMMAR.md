@@ -241,7 +241,7 @@ my_function private function do
 
 	0 counter mutable i32
 	counter 5 < for
-		counter dup 1 + set
+		counter 1 + counter set
 		loop.break
 		# loop.continue
 	end
@@ -256,7 +256,7 @@ my_function private function do
 	0 sum mutable i32
 
 	numbers for
-		sum dup loop.value + set
+		sum loop.value + sum set
 		# loop.index
 	end
 
@@ -493,7 +493,7 @@ pointer_function private unsafe function do
 
 		# Field access autoderefs through pointer<Struct>
 		32 mem.allocate call cp mutable pointer<Cell>
-		cp.value 7 set
+		7 cp.value set
 		cp.value
 		drop
 

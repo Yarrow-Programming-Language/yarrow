@@ -8,7 +8,7 @@ Start with the [grammar tour](GRAMMAR.md) for a readable walkthrough, or jump to
 
 - [Grammar](GRAMMAR.md) - illustrative program that introduces the language by example
 - [Syntax](SYNTAX.md) - formal EBNF derived from the grammar
-- [AST](AST.md) - intended abstract syntax (expressions, statements, types, patterns)
+- [AST](AST.md) - abstract syntax tree as implemented (expressions, statements, types, match cases)
 - [Type system](TYPE_SYSTEM.md) - primitives, coercions, conversions
 - [Memory model](MEMORY_MODEL.md) - ownership, borrowing, regions, unsafe
 - [Runtime](RUNTIME.md) - stack, host runtime, errors, modules and `require`

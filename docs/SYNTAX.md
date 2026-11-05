@@ -132,12 +132,14 @@ statement =
 	| function_decl
 	| var_decl
 	| assignment
+	| move_stmt
 	| if_stmt
 	| match_stmt
 	| for_stmt
 	| defer_stmt
 	| unsafe_block
 	| handle_stmt
+	| fallback_stmt
 	| return_stmt
 	| word
 	;
@@ -149,6 +151,11 @@ var_decl =
 assignment =
 	(* new value already on the stack *)
 	lvalue , "set" ;
+
+(* `source target move`: the source words are already on the stack;
+	 the target name is the word right before `move`. *)
+move_stmt =
+	{ word } , identifier , "move" ;
 
 lvalue =
 	qualified_name ;
@@ -182,11 +189,17 @@ defer_stmt =
 unsafe_block =
 	"unsafe" , { statement } , "end" ;
 
-(* After a call that may error. Optional handler body, then fallback value.
-	 e.g. `call handle 0 fallback end`
+(* After a call that may error. The body is an optional handler; a `fallback`
+   statement inside it supplies the recovery value.
+   e.g. `call handle 0 fallback end`
 		`call handle match ... end 0 fallback end` *)
 handle_stmt =
-	"handle" , { statement } , word , "fallback" , "end" ;
+	"handle" , { statement } , "end" ;
+
+(* Only meaningful inside `handle ... end`: the words before `fallback`
+   are the value pushed when the handled call failed. *)
+fallback_stmt =
+	{ word } , "fallback" ;
 
 return_stmt =
 	"return" ;
@@ -204,6 +217,7 @@ word =
 	| stack_op
 	| memory_op
 	| call_op
+	| builtin
 	| "typeof"
 	;
 
@@ -262,10 +276,15 @@ stack_op =
 	"drop" | "dup" | "swap" | "rot" | "unrot" | "pop" ;
 
 memory_op =
-	"borrow" | "move" | "load" | "store" ;
+	"borrow" | "load" | "store" ;
 
 call_op =
 	"call" | "unwrap" ;
+
+(* Raw host word: `@alloc`, `@print_str`, ... The memory builtins
+   (`@alloc`, `@free`, `@load`, `@store`) require an unsafe context. *)
+builtin =
+	"@" , identifier ;
 
 
 (* ===== Lexical ===== *)

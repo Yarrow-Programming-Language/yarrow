@@ -2,7 +2,7 @@
 
 How a Yarrow program executes: evaluation stack, calls, errors, and modules. Complements [`TYPE_SYSTEM.md`](TYPE_SYSTEM.md) and [`MEMORY_MODEL.md`](MEMORY_MODEL.md). Surface forms come from [`GRAMMAR.md`](GRAMMAR.md) and [`SYNTAX.md`](SYNTAX.md).
 
-Contents: [Execution model](#execution-model), [Stack](#stack), [Functions](#functions), [Errors](#errors), [Modules](#modules), [Session probes](#session-probes), [Warnings](#warnings).
+Contents: [Execution model](#execution-model), [Stack](#stack), [Functions](#functions), [Errors](#errors), [Modules](#modules), [Interaction with memory and types](#interaction-with-memory-and-types).
 
 ## Execution model
 
@@ -21,15 +21,16 @@ The interpreter tree-walks the AST with an explicit runtime operand stack.
 
 A Yarrow program entry (default name `main`, override via `SessionOptions::entry_name`) is the starting point for execution.
 
-| Piece         | API / symbol                                                 | Role                                                                                                       |
-| ------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Entry name    | `SessionOptions::entry_name` (default `main`)                | Which top-level Yarrow function is the program entry. CLI `--main` maps here.                              |
-| Session       | `Session::interpret_source`                                  | Parses and runs the entry function. Missing entry is `E360` naming that function.                          |
+| Piece      | API / symbol                                  | Role                                                                              |
+| ---------- | --------------------------------------------- | --------------------------------------------------------------------------------- |
+| Entry name | `SessionOptions::entry_name` (default `main`) | Which top-level Yarrow function is the program entry. CLI `--main` maps here.     |
+| Session    | `Session::interpret_source`                   | Parses and runs the entry function. Missing entry is `E360` naming that function. |
 
 Exit mapping:
 
-- void / non-integer single return -> `0`
-- integer (including bool / enum) -> value as exit status
+- void -> `0`
+- integer (including enum) -> value as exit status
+- bool / float / string -> printed, exit `0`
 
 **Host runtime:**
 
@@ -67,6 +68,7 @@ The **evaluation stack** is the primary place values live between operations.
 ### Effects
 
 Stack effects by operation kind:
+
 - **Literal, container, name, type value**: push
 - **Binary op, `store`, `move`**: pop 2 (+ push result or nothing)
 - **Unary op, `typeof`, `borrow`, `load`, `dup`, `pop`**: pop 1 (+ push)
@@ -172,6 +174,7 @@ end with |i32 MyCustomErrors|
 ```
 
 At the ABI level this is an **error envelope** with two slots:
+
 - **env**: `0` for success, error tag (program-unique) for failure
 - **payload**: success value (or `0` if void) for success, unused/zero for failure
 
@@ -239,7 +242,7 @@ Built-in and std error members (e.g. `error.OUT_OF_MEMORY`) are comparable tags 
 
 1. **Std**: dotted path matches an embedded `std.*` module (from `lib/std/**/*.yar` at build time).
 2. **User**: under each search path, `"a.b.c"` -> `a/b/c.yar`. The CLI adds the source file's directory.
-3. **Item import**: parent-first: `"a.b.c" require` may mean function `c` in module `a.b` rather than a nested module file; function wins over module when ambiguous (`W406`).
+3. **Item import**: parent-first: `"a.b.c" require` may mean function `c` in module `a.b` rather than a nested module file; function wins over module when ambiguous.
 
 Imported modules are parsed and loaded into the interpreter session.
 
@@ -257,23 +260,6 @@ A complete runnable unit is:
 2. Every module reached by `require` (transitively)
 
 A require cycle (A loads B which loads A again while A is still loading) is rejected with `E382` at the `require` site that closes the cycle.
-
-## Warnings
-
-Successful parsing may still populate diagnostics. Warnings never fail the Session `Result`. Codes are explained via `explain_code` / CLI `yarrow explain`.
-
-| Code   | Meaning                                                                                         |
-| ------ | ----------------------------------------------------------------------------------------------- |
-| `W401` | Unused `const` / `mutable` / `static` binding                                                   |
-| `W402` | Unused `require`                                                                                |
-| `W403` | Value left on the stack and discarded at scope exit                                             |
-| `W404` | Scalar / enum `mutable` read but never `set` / `move`d into                                     |
-| `W405` | Redundant parameter `copy` on a non-heap type                                                   |
-| `W406` | `require` path is both a nested module and a parent-module function (function wins)             |
-| `W407` | Statement after divergent control flow (`return`, both-`if` returns, `loop.break` / `continue`) |
-| `W408` | Empty `match` case arm (`case ... end` with no statements)                                      |
-| `W409` | Empty `if` then branch                                                                          |
-| `W410` | Empty `unsafe ... end` block                                                                    |
 
 ## Interaction with memory and types
 

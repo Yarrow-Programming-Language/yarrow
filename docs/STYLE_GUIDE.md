@@ -19,6 +19,7 @@ The goal is one readable default style so programs look familiar and diffs stay 
 ## Source files
 
 Source file conventions:
+
 - **Encoding**: UTF-8
 - **Line endings**: LF (`\n`)
 - **Trailing whitespace**: None on any line
@@ -117,6 +118,7 @@ end
 ## Naming
 
 Naming conventions by kind:
+
 - **Types** (struct, enum, union, error): `PascalCase` - Examples: `Point`, `Color`, `AppError`, `MyUnion`
 - **Functions and methods**: `snake_case` - Examples: `write_line`, `push_last`, `open_file`
 - **Variables and parameters**: `camelCase` - Examples: `myList`, `score`, `fileHandle`
@@ -358,6 +360,7 @@ end
 ## Literals and containers
 
 Literal forms and their uses:
+
 - `(...)`: `list` literals
 - `[...]`: `array` literals
 - `{ k v ... }`: `hashmap` when keys are literals

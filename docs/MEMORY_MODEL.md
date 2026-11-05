@@ -38,6 +38,7 @@ A declaration pops a value and binds it under a name. The variable owns that val
 ```
 
 Binding ownership:
+
 - **`mutable`**: Owns; `set` drops the previous value
 - **`const`**: Owns; set once at runtime
 - **`static`**: Owned by the program; initializer known at compile time
@@ -107,6 +108,7 @@ A **borrow** is a safe `reference<T>` (or an implicit borrow from reading a non-
 ### Creating borrows
 
 Borrows are created by:
+
 - `value borrow`: Pushes `reference<T>`; value must be borrowable (heap / aggregate)
 - Read of non-copy variable: Pushes a borrow of the variable's value
 - `dup` on non-copy: Not a second owner; use `borrow` (copy types may `dup`)
@@ -136,6 +138,7 @@ Writable methods take `reference<T> mutable` so the pointee must be a mutable bi
 ### Compile-time borrow rules
 
 The following situations are compile errors:
+
 - Use value while borrowed (mutate / `set` / consuming op)
 - `pop` / drop owner while a borrow is live (release the reference first)
 - Use or `move` after `move` (use-after-move)
@@ -209,7 +212,7 @@ p load                                  # 42
 p 4 + q const pointer<i32>            # byte offset; type stays pointer<i32>
 p 123 mem.store call                         # untyped 64-bit word
 p mem.load call
-cp.value 7 set                          # member access autoderefs through pointer<Cell>
+7 cp.value set                          # member access autoderefs through pointer<Cell>
 cp mem.free call
 ```
 
