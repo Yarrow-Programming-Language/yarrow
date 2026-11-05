@@ -233,14 +233,36 @@ Recorded implementation decisions (Stage 4):
   (`E320` unknown variable, the unknown-field diagnostic, `E330` unknown
   function), never `E393`.
 
-- [ ] 4.1.1 Implement chain resolution in the interpreter's call-target
+- [x] 4.1.1 Implement chain resolution in the interpreter's call-target
   path; the checker mirrors for the main unit.
-- [ ] 4.1.2 p41 runs: `o.inner.getv call` returns 7 through the nested
+- [x] 4.1.2 p41 runs: `o.inner.getv call` returns 7 through the nested
   struct.
 
 Acceptance: p41 prints `chained method call ok`; alias and item call
 targets are unchanged; a chain with an unknown middle field reports the
 unknown-field diagnostic; the corpus still passes.
+
+Stage 4 findings, recorded when the stage closed:
+
+- The call pushes the receiver itself (a borrow of the final field,
+  exactly what a struct field read yields) and inserts it under the
+  operands the caller pushed, so it lands on parameter 1 like the
+  explicit `borrow` of the single-segment form. A chain call with extra
+  arguments was verified this way; a method with zero parameters drops
+  the pushed receiver instead of leaking it on the stack.
+- A chain of any depth works (verified three levels), and a chain rooted
+  at a `reference<T>` binding autoderefs in both the interpreter and the
+  checker (the checker resolves a reference binding to its pointee).
+- A failure at any link reports that link's own diagnostic: `E320` for an
+  unknown root variable, `E340` "struct has no field" for an unknown
+  intermediate field, and `E330` for an unknown final method (named with
+  its qualified form). The single-segment unknown-method fall-through to
+  `E393` (Stage 3 parity) is unchanged.
+- The checker resolves chains statically through the struct declarations
+  (the root variable's type, then each field's declared type); a chain it
+  cannot resolve stays an opaque call and the interpreter backstops. A
+  `reference<T>` field autoderefs during that walk, and the final field
+  may name a struct, enum, or union (Stage 3 receivers).
 
 ## Stage 5: Type values for generic and anonymous union types
 

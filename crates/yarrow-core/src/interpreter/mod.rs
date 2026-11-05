@@ -3534,12 +3534,41 @@ impl Interpreter {
         &mut self,
         target: &Expr,
         stack: &mut Vec<Slot>,
-        frame: &Frame,
+        frame: &mut Frame,
         module: Option<&str>,
         caller_fq: &str,
         span: Span,
     ) -> IResult<()> {
-        let name = self.resolve_call_name(target, frame, module, caller_fq, span)?;
+        // Stage 4 (PLAN 4.1.1): a member-chain call target
+        // (`o.inner.getv call`) resolves left to right. The base evaluates
+        // as field reads (autoderefing through references), the final
+        // member names a method on the field's type, and the call pushes
+        // the receiver itself (a borrow of that field) under the
+        // caller-supplied operands. A failure at any link reports that
+        // link's own diagnostic, never E393.
+        let name = if let Expr::Member { base, member } = target
+            && !matches!(base.as_ref(), Expr::Variable { .. })
+        {
+            self.eval_expr(base, stack, frame, module, caller_fq, span)?;
+            let recv = self.pop(stack, span, "call receiver")?;
+            let name = self.slot_method_name(&recv, member, span)?;
+            let n = self
+                .funcs
+                .get(&name)
+                .map(|e| e.function.params.len())
+                .unwrap_or(0);
+            if n > 0 {
+                // The receiver is parameter 1, so it sits under the
+                // operands the caller pushed for the remaining parameters.
+                let at = stack.len().saturating_sub(n - 1);
+                stack.insert(at, recv);
+            } else {
+                recv.drop_owned();
+            }
+            name
+        } else {
+            self.resolve_call_name(target, frame, module, caller_fq, span)?
+        };
         if self.is_std_intrinsic(&name) {
             return self.eval_std_intrinsic(&name, stack, span);
         }
@@ -3596,6 +3625,39 @@ impl Interpreter {
             free_value(handle, KIND_STRING);
         }
         Ok(())
+    }
+
+    /// Stage 4 (PLAN 4.1.1): the method named by the final segment of a
+    /// member-chain call target, resolved from the receiver slot's kind
+    /// exactly like the single-segment method path (the kind names the
+    /// struct, enum, or union type).
+    fn slot_method_name(&self, recv: &Slot, member: &str, span: Span) -> IResult<String> {
+        let tid = (recv.kind >> 8) as u32;
+        let type_name = match recv.kind & 0xff {
+            KIND_STRUCT => self.structs.get(tid as usize).map(|i| i.name.clone()),
+            KIND_ENUM => self.enums.get(tid as usize).map(|i| i.name.clone()),
+            KIND_UNION => self.unions.get(tid as usize).map(|i| i.name.clone()),
+            _ => None,
+        };
+        let fq = match type_name {
+            Some(t) => format!("{t}::{member}"),
+            None => {
+                return Err(InterpretError::new(
+                    format!("unknown function '{member}'"),
+                    span,
+                    "E330",
+                ));
+            }
+        };
+        if self.funcs.contains_key(&fq) {
+            Ok(fq)
+        } else {
+            Err(InterpretError::new(
+                format!("unknown function '{fq}'"),
+                span,
+                "E330",
+            ))
+        }
     }
 
     fn resolve_call_name(
@@ -3676,7 +3738,8 @@ impl Interpreter {
                 // segment is neither a visible alias nor a local names an
                 // unknown alias or module (E399). E393 stays reserved for
                 // targets that are syntactically valid but not yet
-                // supported (a method on a local, a nested member chain).
+                // supported (a method on a local with no registered
+                // method; member chains resolve in `eval_call`).
                 let mut root = base.as_ref();
                 while let Expr::Member { base: inner, .. } = root {
                     root = inner.as_ref();

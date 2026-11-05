@@ -2198,10 +2198,111 @@ impl Checker {
                         }
                     }
                 }
+                // Stage 4 (PLAN 4.1.1): a member-chain target
+                // (`o.inner.getv call`) resolves left to right through
+                // struct fields. The call pushes the receiver itself, so
+                // only the operands for the remaining parameters sit on
+                // the stack.
+                if !matches!(base.as_ref(), Expr::Variable { .. })
+                    && let Some((fq, root)) = self.resolve_chain_method(base, member)
+                {
+                    // PLAN 3.2.1: the chain reads the root variable.
+                    if self.lookup_var(&root).is_some_and(|var| var.moved) {
+                        self.emit(
+                            Diagnostic::error(
+                                CODE_USE_AFTER_MOVE,
+                                format!(
+                                    "'{root}' is used after move: the value now lives in another variable"
+                                ),
+                            )
+                            .with_primary(span, ""),
+                        );
+                    }
+                    let summary = self
+                        .decls
+                        .function(&fq)
+                        .expect("resolve_chain_method found it");
+                    let (is_unsafe, params, returns) = (
+                        summary.is_unsafe,
+                        summary.params.clone(),
+                        summary.returns.clone(),
+                    );
+                    // PLAN 3.5.1: calling an `unsafe function` needs an
+                    // unsafe context.
+                    if is_unsafe {
+                        self.require_unsafe(span, &format!("call to unsafe function '{fq}'"));
+                    }
+                    // PLAN 6.4: operand count and operand types (E312);
+                    // the receiver is parameter 1 and is not pushed by
+                    // the caller.
+                    let user_params: &[Ty] = params.get(1..).unwrap_or(&[]);
+                    self.check_call_operands(&fq, user_params, span);
+                    self.pop_n(params.len().saturating_sub(1));
+                    for ret in returns {
+                        self.push_slot(Slot::Unknown(ret));
+                    }
+                    return;
+                }
                 self.unknown_call();
             }
             _ => self.unknown_call(),
         }
+    }
+
+    /// Stage 4 (PLAN 4.1.1): statically resolve a member-chain call
+    /// target (`o.inner.getv call`). The root must be a local of a named
+    /// struct type; each intermediate member must be a field of that
+    /// struct whose type is again a named struct (a `reference<T>` field
+    /// autoderefs). The final member names a method on the last field's
+    /// struct, enum, or union type. Returns the method's fully-qualified
+    /// name and the root variable; anything unresolvable stays opaque and
+    /// the interpreter backstops with the failing link's own diagnostic.
+    fn resolve_chain_method(&self, base: &Expr, member: &str) -> Option<(String, String)> {
+        let mut fields: Vec<&str> = Vec::new();
+        let mut expr = base;
+        let root = loop {
+            match expr {
+                Expr::Member {
+                    base: inner,
+                    member,
+                } => {
+                    fields.push(member);
+                    expr = inner;
+                }
+                Expr::Variable { name } => break name.clone(),
+                _ => return None,
+            }
+        };
+        fields.reverse();
+        let var = self.lookup_var(&root)?;
+        let mut ty_name = match var.ty {
+            Ty::Named(ref n) => n.clone(),
+            _ => return None,
+        };
+        for (i, field) in fields.iter().enumerate() {
+            let decl = self.decls.structs.get(&ty_name)?;
+            let field = decl.fields.iter().find(|f| f.name == *field)?;
+            let mut fty = &field.ty;
+            while let TypeKind::Reference { inner } = &fty.kind {
+                fty = inner;
+            }
+            let TypeKind::Named(n) = &fty.kind else {
+                return None;
+            };
+            let last = i + 1 == fields.len();
+            if last {
+                let method_target =
+                    self.decls.is_struct(n) || self.decls.is_enum(n) || self.decls.is_union(n);
+                if !method_target {
+                    return None;
+                }
+            } else if !self.decls.is_struct(n) {
+                return None;
+            }
+            ty_name = n.clone();
+        }
+        let fq = format!("{ty_name}::{member}");
+        self.decls.function(&fq).map(|_| (fq, root))
     }
 
     /// PLAN 6.4: for functions visible to the checker, reject a call with
