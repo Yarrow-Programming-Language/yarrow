@@ -59,8 +59,8 @@ use crate::parser::literals::{
 use crate::parser::parse;
 use crate::result::RunResult;
 use crate::runtime::{
-    self, FieldDesc, KIND_ENUM, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT, KIND_UNION,
-    UNION_PAYLOAD_OFFSET, UNION_TAG_OFFSET, free_value,
+    self, FieldDesc, KIND_ARRAY, KIND_ENUM, KIND_LIST, KIND_MAP, KIND_STRING, KIND_STRUCT,
+    KIND_UNION, UNION_PAYLOAD_OFFSET, UNION_TAG_OFFSET, free_value,
 };
 use crate::signature::{Signature, classify_signature};
 use crate::tokenizer::Tokenizer;
@@ -269,7 +269,7 @@ struct EnumInfo {
     strings: Option<Vec<(String, u64)>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum MemberTy {
     Primitive(u64),
     Named(String),
@@ -335,6 +335,10 @@ pub struct Interpreter {
     enums: Vec<EnumInfo>,
     union_ids: HashMap<String, u32>,
     unions: Vec<UnionInfo>,
+    /// Stage 1: anonymous union types interned by their member-type
+    /// signature. The same member list always maps to one union id, so
+    /// struct fields (and Stage 5's type values) share one registration.
+    anon_unions: HashMap<Vec<MemberTy>, u32>,
     error_type_ids: HashMap<String, u32>,
     /// Error type id → `(member_name, tag)`.
     error_types: Vec<(String, Vec<(String, u32)>)>,
@@ -451,6 +455,7 @@ impl Interpreter {
             enums: Vec::new(),
             union_ids: HashMap::new(),
             unions: Vec::new(),
+            anon_unions: HashMap::new(),
             error_type_ids: HashMap::new(),
             error_types: Vec::new(),
             error_tags: HashMap::new(),
@@ -488,6 +493,7 @@ impl Interpreter {
         self.enums.clear();
         self.union_ids.clear();
         self.unions.clear();
+        self.anon_unions.clear();
         self.error_type_ids.clear();
         self.error_types.clear();
         self.error_tags.clear();
@@ -728,7 +734,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn field_layout(&self, ty: &Type) -> IResult<(u64, u32, u32)> {
+    fn field_layout(&mut self, ty: &Type) -> IResult<(u64, u32, u32)> {
         match &ty.kind {
             TypeKind::Primitive(p) => {
                 let kind = primitive_to_kind(*p).ok_or_else(|| {
@@ -760,9 +766,10 @@ impl Interpreter {
                     };
                     Ok((KIND_ENUM | ((*id as u64) << 8), size, align))
                 } else {
-                    Err(InterpretError::unsupported(
-                        format!("field type '{n}'"),
+                    Err(InterpretError::new(
+                        format!("unknown field type '{n}'"),
                         Span::default(),
+                        "E340",
                     ))
                 }
             }
@@ -773,18 +780,62 @@ impl Interpreter {
             }
             TypeKind::List { element } => {
                 let (ek, _, _) = self.field_layout(element)?;
+                if ek >> 56 != 0 {
+                    return Err(Self::field_kind_too_deep(ty));
+                }
                 Ok((KIND_LIST | (ek << 8), 8, 8))
             }
             TypeKind::Hashmap { key, value } => {
                 let (kk, _, _) = self.field_layout(key)?;
                 let (vk, _, _) = self.field_layout(value)?;
+                if kk >> 32 != 0 || vk >> 24 != 0 {
+                    return Err(Self::field_kind_too_deep(ty));
+                }
                 Ok((KIND_MAP | (kk << 8) | (vk << 40), 8, 8))
             }
-            _ => Err(InterpretError::unsupported(
-                format!("field type {ty:?}"),
-                Span::default(),
-            )),
+            // Stage 1: an array field stores its elements inline in the
+            // struct allocation; the kind code is the same encoding
+            // bindings use (`0x60 | elem << 8 | count << 40`).
+            TypeKind::Array { element, size } => {
+                let (ek, esize, ealign) = self.field_layout(element)?;
+                if ek >> 32 != 0 {
+                    return Err(Self::field_kind_too_deep(ty));
+                }
+                let count = size.ok_or_else(|| {
+                    InterpretError::new(
+                        "cannot infer the array size: `array<T>` without N has no \
+                         initializer to infer from here",
+                        Span::default(),
+                        "E381",
+                    )
+                })?;
+                Ok((
+                    KIND_ARRAY | (ek << 8) | (count << 40),
+                    (count as u32) * esize,
+                    ealign,
+                ))
+            }
+            // Stage 1: an anonymous union field type interns by member
+            // signature and stores a union handle like a named union field.
+            TypeKind::Union(types) => {
+                let id = self.intern_anon_union(types)?;
+                Ok((KIND_UNION | ((id as u64) << 8), 8, 8))
+            }
         }
+    }
+
+    /// Stage 1: a field or element type whose kind code does not fit the
+    /// width of its embedding (array element, map key/value, list element)
+    /// is rejected with a real diagnostic instead of a corrupted encoding.
+    fn field_kind_too_deep(ty: &Type) -> InterpretError {
+        InterpretError::new(
+            format!(
+                "field type '{}' is nested too deeply to encode",
+                type_label(ty)
+            ),
+            Span::default(),
+            "E340",
+        )
     }
 
     fn register_enum(&mut self, module: Option<&str>, d: &EnumDecl) -> IResult<()> {
@@ -951,6 +1002,48 @@ impl Interpreter {
                 Span::default(),
             )),
         }
+    }
+
+    /// Stage 1: intern an anonymous union type by its member-type
+    /// signature. The same member list always maps to one union id; the
+    /// interned union registers in `self.unions` like a named union, so
+    /// wrapping, matching, and freeing treat it identically.
+    fn intern_anon_union(&mut self, types: &[Type]) -> IResult<u32> {
+        let members = types
+            .iter()
+            .map(|t| self.member_ty(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        // PLAN 5.3.1: union members must be distinct, named or anonymous.
+        for (i, m) in members.iter().enumerate() {
+            if members[..i].contains(m) {
+                return Err(InterpretError::new(
+                    format!(
+                        "anonymous union declares the member type '{}' more than once",
+                        self.member_ty_label(m)
+                    ),
+                    Span::default(),
+                    "E385",
+                ));
+            }
+        }
+        if let Some(id) = self.anon_unions.get(&members) {
+            return Ok(*id);
+        }
+        let id = self.unions.len() as u32;
+        let name = format!(
+            "|{}|",
+            members
+                .iter()
+                .map(|m| self.member_ty_label(m))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        self.unions.push(UnionInfo {
+            name,
+            members: members.clone(),
+        });
+        self.anon_unions.insert(members, id);
+        Ok(id)
     }
 
     /// Human-readable name of a union member type, for the `E385` message.
@@ -1997,10 +2090,25 @@ impl Interpreter {
                             slot.drop_owned();
                             return Err(e);
                         }
+                        // Stage 1: a union field wraps a member value into
+                        // the union block, like a union binding does.
+                        if (field.kind & 0xff) == KIND_UNION {
+                            slot =
+                                self.wrap_union_value(slot, (field.kind >> 8) as u32, stmt.span)?;
+                        }
                         // Free previous union payload before overwrite (matches JIT).
                         if (field.kind & 0xff) == KIND_UNION {
                             let old_bits = read_bits_at(handle, field.offset, field.size);
                             free_value(old_bits, field.kind);
+                        }
+                        // Stage 1: an array field stores its elements
+                        // inline; release the old elements, then write the
+                        // new ones.
+                        if (field.kind & 0xff) == KIND_ARRAY {
+                            self.free_array_field(handle, &field);
+                            self.store_array_field(handle, &field, slot, stmt.span)?;
+                            base_slot.drop_owned();
+                            return Ok(Flow::Next);
                         }
                         let bits = slot.value.as_bits().unwrap_or(0);
                         write_bits_at(handle, field.offset, field.size, bits);
@@ -2928,6 +3036,26 @@ impl Interpreter {
                 if let Err(e) = self.check_field_visibility(info, &field, module, span) {
                     base_slot.drop_owned();
                     return Err(e);
+                }
+                // Stage 1: an array field stores its elements inline; a
+                // read builds an array value from the bits (a real copy of
+                // the element bits, borrowed handles for heap elements).
+                if (field.kind & 0xff) == KIND_ARRAY {
+                    let elem_kind = (field.kind >> 8) & 0xffff_ffff;
+                    let count = field.kind >> 40;
+                    let esize = kind_elem_size(elem_kind);
+                    let mut elems = Vec::with_capacity(count as usize);
+                    for i in 0..count {
+                        let bits =
+                            read_bits_at(handle, field.offset + (i as i32) * (esize as i32), esize);
+                        elems.push(self.bits_to_slot_kind(bits, elem_kind, false).value);
+                    }
+                    base_slot.drop_owned();
+                    stack.push(Slot {
+                        value: Value::Array(elems),
+                        kind: field.kind,
+                    });
+                    return Ok(());
                 }
                 let bits = read_bits_at(handle, field.offset, field.size);
                 base_slot.drop_owned();
@@ -4960,7 +5088,16 @@ impl Interpreter {
                     )
                 })?;
             self.eval_expr(expr, stack, frame, module, caller_fq, span)?;
-            let val = self.pop(stack, span, "struct field")?;
+            let mut val = self.pop(stack, span, "struct field")?;
+            // Stage 1: a union field wraps a member value into the union
+            // block; an array field stores its elements inline.
+            if (field.kind & 0xff) == KIND_UNION {
+                val = self.wrap_union_value(val, (field.kind >> 8) as u32, span)?;
+            }
+            if (field.kind & 0xff) == KIND_ARRAY {
+                self.store_array_field(handle, field, val, span)?;
+                continue;
+            }
             let bits = val.value.as_bits().unwrap_or(0);
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -4985,7 +5122,7 @@ impl Interpreter {
     }
 
     fn eval_empty_aggregate(
-        &self,
+        &mut self,
         ty: &Type,
         module: Option<&str>,
         local_aliases: &HashMap<String, String>,
@@ -5098,6 +5235,15 @@ impl Interpreter {
             }
         };
         let (ek, esize, _) = self.field_layout(elem_ty)?;
+        // Stage 1: a list stores one u64 of bits per element, so a
+        // fixed-size array element (inline, multi-word) cannot be pushed.
+        if ek & 0xff == KIND_ARRAY {
+            return Err(InterpretError::new(
+                "a list cannot store fixed-size array elements",
+                span,
+                "E340",
+            ));
+        }
         let handle = runtime::yarrow_list_new(u64::from(esize));
         for e in elems {
             self.eval_expr(e, stack, frame, module, caller_fq, span)?;
@@ -5185,6 +5331,88 @@ impl Interpreter {
             }
         }
         Ok(slot)
+    }
+
+    /// Stage 1: release the heap elements of an inline array field before
+    /// the field is overwritten or its struct freed by the interpreter.
+    fn free_array_field(&self, base: u64, field: &FieldInfo) {
+        let elem_kind = (field.kind >> 8) & 0xffff_ffff;
+        let count = field.kind >> 40;
+        let esize = kind_elem_size(elem_kind);
+        for i in 0..count {
+            let bits = read_bits_at(base, field.offset + (i as i32) * (esize as i32), esize);
+            free_value(bits, elem_kind);
+        }
+    }
+
+    /// Stage 1: store an array value into an inline array field. Element
+    /// bits are written in order; an owned heap element transfers into the
+    /// field, a borrowed one is cloned so the field owns an independent
+    /// copy.
+    fn store_array_field(
+        &self,
+        base: u64,
+        field: &FieldInfo,
+        slot: Slot,
+        span: Span,
+    ) -> IResult<()> {
+        let elem_kind = (field.kind >> 8) & 0xffff_ffff;
+        let count = field.kind >> 40;
+        let esize = kind_elem_size(elem_kind);
+        let elems = match slot.value {
+            Value::Array(elems) => elems,
+            other => {
+                other.drop_owned();
+                return Err(InterpretError::new(
+                    format!(
+                        "struct field '{}' expects an array of {count} elements",
+                        field.name
+                    ),
+                    span,
+                    "E340",
+                ));
+            }
+        };
+        if elems.len() as u64 != count {
+            let got = elems.len();
+            for e in elems {
+                e.drop_owned();
+            }
+            return Err(InterpretError::new(
+                format!(
+                    "struct field '{}' expects an array of {count} elements, got {got}",
+                    field.name
+                ),
+                span,
+                "E340",
+            ));
+        }
+        for (i, e) in elems.into_iter().enumerate() {
+            let bits = match &e {
+                Value::Str { handle, owned } => {
+                    if *owned {
+                        *handle
+                    } else {
+                        runtime::yarrow_value_clone(*handle, KIND_STRING)
+                    }
+                }
+                Value::Heap { handle, owned } => {
+                    if *owned {
+                        *handle
+                    } else {
+                        runtime::yarrow_value_clone(*handle, elem_kind)
+                    }
+                }
+                other => other.as_bits().unwrap_or(0),
+            };
+            write_bits_at(
+                base,
+                field.offset + (i as i32) * (esize as i32),
+                esize,
+                bits,
+            );
+        }
+        Ok(())
     }
 
     fn wrap_union_value(&self, slot: Slot, uid: u32, span: Span) -> IResult<Slot> {
@@ -5696,6 +5924,28 @@ fn kind_elem_size(kind: u64) -> u32 {
         2 | 7 | 12 => 2,
         3 | 8 | 11 | 13 => 4,
         _ => 8,
+    }
+}
+
+/// Human-readable spelling of a type, for field-layout diagnostics.
+fn type_label(ty: &Type) -> String {
+    match &ty.kind {
+        TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
+        TypeKind::Named(n) => n.clone(),
+        TypeKind::Array { element, size } => match size {
+            Some(n) => format!("array<{} {n}>", type_label(element)),
+            None => format!("array<{}>", type_label(element)),
+        },
+        TypeKind::List { element } => format!("list<{}>", type_label(element)),
+        TypeKind::Hashmap { key, value } => {
+            format!("hashmap<{} {}>", type_label(key), type_label(value))
+        }
+        TypeKind::Reference { inner } => format!("reference<{}>", type_label(inner)),
+        TypeKind::Pointer { inner } => format!("pointer<{}>", type_label(inner)),
+        TypeKind::Union(types) => format!(
+            "|{}|",
+            types.iter().map(type_label).collect::<Vec<_>>().join(" ")
+        ),
     }
 }
 

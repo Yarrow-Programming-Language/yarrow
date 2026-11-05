@@ -3,35 +3,33 @@
 Roadmap for closing the gaps between `docs/GRAMMAR.md` (with the EBNF in
 `docs/SYNTAX.md`) and the interpreter in this crate. The previous plan's
 stages are complete and were removed; this plan holds the findings of the
-third spec audit. That audit compared the spec against
-`src/interpreter/mod.rs`, `src/checker/mod.rs`, and `src/parser/mod.rs`, and
-verified every finding with a probe program (run from `/tmp/yarrow-audit3/`;
-recreate the probes from the acceptance criteria if that directory is gone).
-
-This plan supersedes one recorded decision of the previous plan: Stage 2 of
-the second audit kept type-level privacy unenforced ("type-level privacy
-stays as it is"). Stage 4 below reverses that decision; the spec sentence
-"Private top-level entities stay file-local and are not exported" applies to
-types, and the two std types that importers name become `public`.
+fourth spec audit. That audit compared the spec against
+`src/interpreter/mod.rs`, `src/checker/mod.rs`, and `src/parser/mod.rs`,
+and verified every finding with a probe program (run from
+`/tmp/yarrow-audit4/`; recreate the probes from the acceptance criteria if
+that directory is gone).
 
 ## Deferral policy
 
-This plan has no deferrals, explicitly. Every task must close its gap
-completely in the stage that owns it:
+This plan has no deferrals, explicitly and without exception. Every task
+must close its gap completely in the stage that owns it:
 
-- An `E393` "interpreter does not support ... yet" outcome is not acceptable
-  for any item below. Where a spec-valid program can reach an `E393` today
-  (the module-qualified type name in Stage 4, the out-of-scope alias in
-  Stage 6), the task replaces it with a real diagnostic or a real feature.
-  `E393` remains allowed only for internal invariants that no spec-valid
-  program can reach (for example an array as the entry return value).
-- Where the spec is ambiguous, the stage records one decision and implements
-  it; it does not park the feature behind a diagnostic. Stage 1 (what `dup`
-  may duplicate) and Stage 5 (what counts as an unsafe context) record such
-  decisions.
+- An `E393` "interpreter does not support ... yet" outcome is not
+  acceptable for any item below. Where a spec-valid program reaches an
+  `E393` today (Stages 1 through 5), the task replaces it with the real
+  feature or a real diagnostic. `E393` remains allowed only for internal
+  invariants that no spec-valid program can reach (for example an array as
+  the entry return value).
+- Where the spec is ambiguous, the stage records exactly one decision and
+  implements it in the same stage; no feature waits on a spec
+  clarification and nothing is parked behind a diagnostic. Stages 6, 7,
+  8, and 9 record such decisions.
 - Where a rule needs a new diagnostic code, the code is reserved here and
-  must be added to the explain catalog (`src/diagnostics/explain.rs`) in the
-  same task. Reserved codes (verified unused today): `E398` `E399`.
+  must be added in the same task. Reserved codes (verified unused today):
+  `E134` (tokenizer family, which does not use the explain catalog) and
+  `E400` (explain catalog).
+- If a task uncovers a deeper gap beneath its own, the stage grows to
+  close that gap too. Partial stages do not graduate.
 
 Status legend:
 
@@ -41,281 +39,330 @@ Status legend:
 
 ## Table of contents
 
-- [Stage 1: `dup` duplicates the value, not the producer](#stage-1-dup-duplicates-the-value-not-the-producer)
-- [Stage 2: Empty container literals require a typed context](#stage-2-empty-container-literals-require-a-typed-context)
-- [Stage 3: Condition words may consume prior stack values](#stage-3-condition-words-may-consume-prior-stack-values)
-- [Stage 4: Type-level privacy and module-qualified type names](#stage-4-type-level-privacy-and-module-qualified-type-names)
-- [Stage 5: Unsafe operations need an unsafe block, also inside unsafe functions](#stage-5-unsafe-operations-need-an-unsafe-block-also-inside-unsafe-functions)
-- [Stage 6: Diagnostic and driver quality](#stage-6-diagnostic-and-driver-quality)
+- [Stage 1: Composite struct fields](#stage-1-composite-struct-fields)
+- [Stage 2: Container-typed union members](#stage-2-container-typed-union-members)
+- [Stage 3: `implement` on enums and unions](#stage-3-implement-on-enums-and-unions)
+- [Stage 4: Chained member call targets](#stage-4-chained-member-call-targets)
+- [Stage 5: Type values for generic and anonymous union types](#stage-5-type-values-for-generic-and-anonymous-union-types)
+- [Stage 6: `for` over a hashmap](#stage-6-for-over-a-hashmap)
+- [Stage 7: `const` accepts one runtime `set`](#stage-7-const-accepts-one-runtime-set)
+- [Stage 8: The documented coercion matrix](#stage-8-the-documented-coercion-matrix)
+- [Stage 9: Unicode rune literals](#stage-9-unicode-rune-literals)
+- [Stage 10: Diagnostic quality](#stage-10-diagnostic-quality)
 - [Verification](#verification)
 
-## Stage 1: `dup` duplicates the value, not the producer
+## Stage 1: Composite struct fields
 
-The spec says `dup` is for copy types only ("copy types only; non-copy → use
-borrow") and its stack comment is `[42] → [42, 42]`: one value becomes two
-copies of that value. Two violations exist today, both caused by the parser.
+The EBNF has `field_decl = type, identifier, [ visibility ]`, and `type`
+includes `generic_type` and `union_type_literal`. Two field types fail with
+`E393` "interpreter does not support field type ... yet" from
+`field_layout` (`src/interpreter/mod.rs`):
 
-When the word before `dup` is "dupable", the parser clones the previous
-expression at parse time instead of emitting `StackOp::Dup`
-(`src/parser/mod.rs`, `TokenKind::Dup` arm, with `is_dupable_word` at the
-bottom of the file). That word list includes effectful and non-copy
-expressions:
-
-- `Call` and `Unwrap`: `make call dup` evaluates `make` twice. A probe with
-  a fallible `make` left two error envelopes (four stack values) where the
-  spec promises one duplicated value.
-- `String`, `List`, `Map`, `StructLit`, `EmptyMapOrStruct`: `"x" dup` and
-  `(1 2 3) dup` never reach the checker's `E371` rule
-  (`check_stack_op`, `src/checker/mod.rs`), so the non-copy restriction is
-  not enforced for literals. Each clone re-evaluates into a separate value,
-  which is memory-safe but spec-illegal.
-- `Variable` and `Borrow`: the clone re-reads the variable, which for a
-  non-copy binding is a second borrow and fails with the wrong code
-  (`E375` second live borrow instead of `E371`).
+- `array<T N>`: a struct with `array<i32 3> data public` fails at
+  registration (probe p30). `field_layout` has no `TypeKind::Array` arm.
+- Anonymous union `|T U|`: the same struct shape with
+  `|i32 string| payload public` fails the same way (probe p32);
+  `TypeKind::Union` falls into the catch-all. Named union fields work
+  (probe p31).
 
 Recorded implementation decisions (Stage 1):
 
-- The parse-time clone survives only for words that are statically copy
-  values: integer, float, bool, and rune literals, and type values. Every
-  other `dup` emits `Expr::StackOp(StackOp::Dup)` so the checker sees it.
-  The postfix statement grouping the clone was protecting (`i dup 1 + set`)
-  must keep working; if the clone was load-bearing for grouping, regroup
-  without re-executing the word.
-- `dup` on a borrow or reference stays legal. The spec's non-copy list is
-  "string, list<T>, hashmap<K V>, unions, structs"; references are not in
-  it, and the grammar tour's union arm idiom (`dup *` on the
-  `reference<Member>` the arm receives) requires duplicating a reference.
-  The runtime already clones a reference unowned, which is safe: releasing
-  the clone is a no-op and the original borrow releases normally.
-- `dup` on an owned heap value (string, list, map, struct, union kinds) is
-  `E371`. The checker's `Owned` arm already emits it; the runtime `Dup` arm
-  gains the same rejection as the backstop for units the checker cannot
-  model (module units, the REPL).
+- An array field stores its elements inline in the struct allocation:
+  size `N * element size`, align = element align, kind code
+  `0x60 | (elem << 8) | (count << 40)` (the same encoding bindings use).
+  A read builds an array value from the bits; a write (a struct literal
+  field or `w.data set`) stores the element bits. Arrays are copy types,
+  so a field read pushes a real copy.
+- An anonymous union field type is interned by its member-type signature:
+  the same member list always maps to one union id, shared with Stage 5's
+  type values. The field then stores a `KIND_UNION | (id << 8)` handle
+  exactly like a named union field.
+- The checker already parses both field types; it must model their stack
+  effects like any other field. Privacy and visibility rules are
+  unchanged.
 
-- [x] 1.1.1 Restrict the parse-time clone to the copy literal words
-  (integer, float, bool, rune, type value); every other `dup` emits
-  `StackOp::Dup`. Keep `i dup 1 + set` on a copy variable parsing and
-  running exactly as today.
-- [x] 1.1.2 In `eval_stack_op` (`StackOp::Dup`), reject an owned heap value
-  on top with `E371` and the checker's message, instead of cloning the
-  handle unowned.
-- [x] 1.2.1 In the checker's `check_stack_op` `Dup` arm, keep `E371` for
-  `Slot::Owned`; for `Slot::Borrow`, stop emitting `E371` and push the same
-  borrow without re-registering it (no `E375` cascade), matching the
-  decision above.
-- [x] 1.2.2 Check the `E371` explain entry covers both the check-time and
-  runtime paths; update its wording if it names only one.
+- [x] 1.1.1 `field_layout` gains a `TypeKind::Array` arm with the inline
+  size/align/kind rules above; struct registration, field reads, field
+  writes, and struct literals with array fields all work.
+- [x] 1.1.2 `field_layout` resolves `TypeKind::Union` through the
+  interning table; a struct field of anonymous union type binds, reads,
+  writes, and drops like a named union field.
+- [x] 1.2.1 The checker models both field types for the main unit.
 
-Acceptance: `make call dup` calls `make` exactly once and the duplicated top
-value equals the original; `"x" dup`, `(1 2 3) dup`, and `{x 1} dup` fail
-with `E371`; `42 dup`, `3.14 dup`, `true dup`, and `'a' dup` still work;
-`i dup 1 + set` on a mutable `i32` still sets `i` to `i + 1`; the grammar
-tour's union arm `dup *` still checks and runs clean; every file in
+Acceptance: p30 and p32 run; the named-union-field probe p31 still runs;
+a struct with an array field drops without leaks; every file in
 `docs/examples/valid/` still passes.
 
-## Stage 2: Empty container literals require a typed context
+Stage 1 findings, recorded when the stage closed:
 
-The spec: "Empty literals have no element type until a typed context (e.g. a
-variable declaration) supplies one. Empty literals need a typed binding (or
-other typed context) before use." Only `{}` follows it: the interpreter
-rejects a bare `Expr::EmptyMapOrStruct` with `E395`
-("empty `{}` requires a typed context"). An empty `()` or `[]` parses as a
-`List`/`Array` expression with no elements and evaluates into a fresh
-container with a default element kind, so `() list.len call` prints `0` and
-`[] drop` runs, with no diagnostic anywhere.
+- p30's registration, struct literal, field read, field set, and drop
+  all work, but its final check line `w.data 1 ==` compares an array
+  with an integer, which is `E333` exactly as for a plain array binding
+  (probe p34 behaves identically). The probe's check line predates array
+  field semantics; the field mechanics were verified with an
+  iteration-based probe instead. No `E393` remains on the field path.
+- A union field (named or anonymous) now wraps a raw member value at
+  struct-literal and `set` time, like a union binding does. Before this
+  stage those writes stored the raw bits as the union handle and
+  segfaulted at drop.
+- A field or element type whose kind code does not fit its embedding
+  width (an array of arrays, an array of hashmaps, a hashmap with an
+  array key or value) is rejected with `E340` instead of a corrupted
+  encoding; a list literal with a fixed-size array element is rejected
+  with `E340` because list storage holds one u64 per element.
+
+## Stage 2: Container-typed union members
+
+The EBNF has `union_decl = identifier, "union", type, { type }`, and
+`type` includes `list<T>`, `hashmap<K V>`, and `array<T N>`. `member_ty`
+(`src/interpreter/mod.rs`) handles only primitives, named types, and
+references; a union with a `list<i32>` member (probe p36) or an
+`array<i32 2>` member (probe p39) fails with `E393` "union member ... yet".
 
 Recorded implementation decisions (Stage 2):
 
-- The typed contexts are the binding forms: the initializer of a
-  `mutable`/`const`/`static` declaration whose type is `list<T>`,
-  `array<T N>`, or `hashmap<K V>`. This matches the spec's own examples and
-  the corpus (17_empty_placeholders).
-- A bare empty `()`/`[]` anywhere else (a lone statement, an operand, a
-  `dup` source, a call argument) is `E395`. Call arguments are not a typed
-  context: calls are opaque to both passes and the spec names none.
-- The `E395` message and explain entry generalize to name all three empty
-  literal forms, not only `{}`.
+- `list<T>` and `hashmap<K V>` members store their heap handle in the
+  union payload, exactly like string members today.
+- `array<T N>` members store their elements inline; the union payload is
+  sized to its largest member as today.
+- Init and `set` accept values of these member types (union packing), and
+  match arms (`list<i32> case`) receive `reference<Member>` like every
+  other arm, autoderefing on read.
+- Member types must still be distinct (`E385` unchanged).
 
-- [x] 2.1.1 Reject an empty `()`/`[]` that is not the direct initializer of
-  a binding with a declared container type: in the checker for the main
-  unit, and in the interpreter for every unit (module bodies and the REPL
-  included), with `E395`.
-- [x] 2.1.2 Update the `E395` message and its explain entry to cover `()`,
-  `[]`, and `{}`.
+- [ ] 2.1.1 `member_ty` gains `List`, `Hashmap`, and `Array` arms with
+  the storage rules above; union registration sizes payloads correctly.
+- [ ] 2.1.2 Union init, `set`, and match arms work for container members;
+  the arm in p36 reads the list back through the reference.
+- [ ] 2.2.1 The checker models container members for the main unit.
 
-Acceptance: `() list.len call` and `[] drop` fail with `E395`;
-`() l const list<i32>`, `[] a const array<i32 0>`, and
-`{} m const hashmap<string i32>` still bind; 17_empty_placeholders and the
-rest of the corpus still pass.
+Acceptance: p36 and p39 run; a union with a list member round-trips
+through a match arm; duplicate member types still fail with `E385`; the
+corpus still passes.
 
-## Stage 3: Condition words may consume prior stack values
+## Stage 3: `implement` on enums and unions
 
-The EBNF models the words before `if` as ordinary statements ("condition
-bool already on the stack", `if_stmt = "if", { statement }, ...`), so a
-condition may consume values left by earlier statements, exactly like any
-other stack words. The interpreter instead folds the preceding words into
-one condition expression and requires them to leave exactly one value over
-the pre-`if` height (`eval_cond`, `src/interpreter/mod.rs`: the
-`stack.len() != before + 1` check). Spec-valid programs fail with `E324`
-"condition must evaluate to a single value":
-
-- `risky call handle 0 fallback end 0 == if ... end`: the `handle`
-  statement is not foldable, so the condition `0 ==` consumes the payload
-  the handle left, net zero.
-- `p borrow p.x 5 == if ... end`: the folded words include the `borrow`,
-  which stays on the stack under the bool, net greater than one.
-
-The same folding feeds the `for` source words, so the restriction applies
-there too.
+The EBNF has `implement_block = identifier, "implement",
+{ function_decl }, "end"`; the identifier is not restricted to structs.
+`Color implement` and `U implement` parse and register, but calling the
+method fails with `E393` "method call / complex call target" (probes p16
+and p38): call resolution only handles struct receivers (`KIND_STRUCT`).
 
 Recorded implementation decisions (Stage 3):
 
-- Values the condition words leave below the bool stay on the stack; the
-  branch (or loop body) runs with them. The `if` handler's old clear back
-  to the pre-condition height was a no-op under the exact-height rule and
-  would have dropped those values, so it is gone.
-- The `for` body's balance check (`E325`) and per-iteration clears are
-  relative to the height the source words left the stack at, not the
-  pre-`for` height, in both loop forms. A condition-form loop still
-  re-evaluates its source before every iteration, so a source that consumes
-  values from before the `for` runs out of operands with the underflow
-  diagnostic (`E362`) once they are gone.
+- Methods resolve on enum and union receivers exactly like struct
+  receivers: the receiver slot's kind gives the type id, and the method
+  is looked up as `Type::method`. The receiver is still an explicit
+  borrow plus a `self const reference<T>` binding; enums and unions have
+  no fields, so a method body reads the discriminant or payload through
+  `self` like any reference.
+- Method visibility follows the existing function rules: a private method
+  is same-unit only.
 
-- [x] 3.1.1 In `eval_cond`, drop the height requirement. After evaluating
-  the condition words the stack must be non-empty (an empty result keeps
-  the existing underflow diagnostic) and the top must be `bool`; pop it. A
-  non-bool top keeps `E324` with the "condition must be bool" message.
-- [x] 3.1.2 Apply the same model to the `for` source words (the runtime
-  bool-versus-iterable dispatch): the source words may consume prior stack
-  values; only the popped top decides the loop form.
-- [x] 3.1.3 Match case conditions keep their subject-relative behavior
-  (words before `case` operate on the borrowed subject); verify the
-  grammar tour idioms (`dup 85 == case`, `dup Color.RED == case`) are
-  unchanged.
+- [ ] 3.1.1 Call resolution accepts `KIND_ENUM` and `KIND_UNION`
+  receivers in the interpreter; the checker mirrors for the main unit.
+- [ ] 3.1.2 p16 and p38 run: an enum method returns through a borrowed
+  receiver, and a union method reads the active payload.
 
-Acceptance: `risky call handle 0 fallback end 0 == if ... end` runs;
-`p borrow p.x 5 == if ... end pop` runs; `5 10 < if` and
-`counter 5 < for` behave exactly as before; `1 2 if` fails (top not bool);
-`1 if` fails; every file in `docs/examples/valid/` still passes.
+Acceptance: p16 prints `red`; p38 runs; struct methods are unchanged
+(`00_grammar_tour` and `06_structs_and_enums` pass); the corpus still
+passes.
 
-## Stage 4: Type-level privacy and module-qualified type names
+## Stage 4: Chained member call targets
 
-Two related gaps in the type registry:
-
-- Privacy is not enforced for types. `register_struct`, `register_enum`,
-  `register_union`, and `register_error` record field visibility but never
-  the type's own visibility, and no use site checks it. A module's
-  `Point private struct` binds fine in the main unit by bare name,
-  although the spec says private top-level entities "stay file-local and
-  are not exported". (Stage 2 of the previous audit enforced this for
-  functions only.)
-- Module-qualified type names are unsupported. The EBNF allows
-  `type = ... | qualified_name`, so `m.Point` is spec-valid syntax, but a
-  binding of that type fails with `E393` "interpreter does not support
-  binding type ... yet".
+`qualified_name = identifier, { ".", identifier }` allows any depth, and
+a word may be a call target. `o.inner.getv call` fails with `E393`
+(probe p41): resolution stops after one member.
 
 Recorded implementation decisions (Stage 4):
 
-- Types stay globally unique by bare name (`E384` from the previous plan is
-  unchanged); privacy controls nameability, not namespace separation. A
-  private type is usable only inside its own unit; a public type is
-  nameable by importers both bare and through its module alias.
-- The use sites that must check visibility are: a binding's declared type,
-  struct/union/enum literals, `Type implement`, `typeof` comparisons, and
-  match type cases. Same-unit use of a private type stays legal.
-- The two std types that importers name today become `public`: `File` in
-  `lib/std/fs.yar` (the grammar tour binds `{fd -1} failed const File`) and
-  `Error` in `lib/std/error.yar` (signatures name `error.Error` across
-  units). Default visibility is private, so without this they would break.
-- A qualified name that resolves to no alias, or whose alias holds no such
-  type, is `E340` (unknown type), not a new code. A resolved but private
-  type is the new `E398`.
+- A member-chain call target resolves left to right: the first segment is
+  a local variable (alias and item paths keep their existing precedence),
+  each intermediate segment is a field read that autoderefs through
+  references, and the final segment resolves as a method on the field's
+  struct type. The receiver pushed for the call is a borrow of that field.
+- A failure at any link reports the existing diagnostic for that link
+  (`E320` unknown variable, the unknown-field diagnostic, `E330` unknown
+  function), never `E393`.
 
-- [x] 4.1.1 Record the declaring unit and visibility for every registered
-  type (struct, enum, union, error), mirroring what `StructInfo` already
-  records per field.
-- [x] 4.1.2 Enforce privacy at the use sites listed above: a private type
-  used from a different unit fails with `E398`; same-unit use is legal.
-  The checker covers the main unit; the interpreter backstops module units.
-- [x] 4.1.3 Mark `File public struct` in `lib/std/fs.yar` and
-  `Error public error` in `lib/std/error.yar`.
-- [x] 4.2.1 Resolve module-qualified type names (`m.Point`) through the
-  alias/require tables to the module's type, replacing the `E393` binding
-  rejection: public types bind, private types fail with `E398`, unknown
-  names fail with `E340`.
-- [x] 4.2.2 The checker resolves qualified type names for the requires it
-  can see (main unit), the same way it resolves qualified calls; module
-  units stay opaque as today.
-- [x] 4.2.3 Add `E398` to the explain catalog: mark the type `public` in
-  the declaring module or move the use into that module.
+- [ ] 4.1.1 Implement chain resolution in the interpreter's call-target
+  path; the checker mirrors for the main unit.
+- [ ] 4.1.2 p41 runs: `o.inner.getv call` returns 7 through the nested
+  struct.
 
-Acceptance: a module's private struct used by bare name from the main unit
-fails with `E398`; the same type used inside its own module runs; `m.Point`
-binds for a public struct and fails with `E398` for a private one; an
-unknown `m.Nope` fails with `E340`; the corpus (with `File` and `Error` now
-public) and the std modules still load and run.
+Acceptance: p41 prints `chained method call ok`; alias and item call
+targets are unchanged; a chain with an unknown middle field reports the
+unknown-field diagnostic; the corpus still passes.
 
-## Stage 5: Unsafe operations need an unsafe block, also inside unsafe functions
+## Stage 5: Type values for generic and anonymous union types
 
-The spec: "Even inside an unsafe function, mark the ops with an unsafe
-block." Today both passes treat an `unsafe function` body as an unsafe
-context: the checker increments `unsafe_depth` around the body of an unsafe
-function (`src/checker/mod.rs`, the `if f.is_unsafe` pair), and `E370`'s
-help text offers "or mark the enclosing function 'unsafe function'". A probe
-runs `mem.allocate`/`mem.free` directly in an unsafe function's body with
-no inner block.
+The EBNF has `word = ... | type | ...`, and `type` includes
+`generic_type` and `union_type_literal`. The parser only turns bare
+primitive names into type values (`src/parser/mod.rs`, the
+`Primitive::parse_name` arm), so `a typeof array<i32 3> ==` parses `<` as
+a comparison and fails with `E311` (probe p24). typeof comparisons for
+generic types are impossible today. `docs/AST.md` already documents
+`TypeValue(Type)`; the implementation carries only a name.
 
 Recorded implementation decisions (Stage 5):
 
-- Only an active `unsafe ... end` block is an unsafe context. The
-  `unsafe` marker on a function stays declarative, matching "escapes are
-  visible at definition (`unsafe function`)": it documents the escape and
-  callers still need a block to call it.
-- Nothing in the corpus or std relies on the lenient rule: the grammar
-  tour's `pointer_function`, 11_unsafe_pointers, and every function in
-  `lib/std/mem.yar` already wrap the unsafe ops in inner `unsafe ... end`
-  blocks.
-- The rule covers what `E370` covers today: calls to unsafe functions and
-  the unsafe builtins (`@alloc` and friends). The `store`/`load` words are
-  not gated; the spec does not require it and this plan does not add it.
+- `Expr::TypeValue` carries a full `Type`, matching `docs/AST.md`. In
+  word position the parser accepts `generic_type` (`array`, `list`,
+  `hashmap`, `pointer`, `reference`) and `union_type_literal`
+  (`|T U|`) and emits the type value.
+- Type value equality is structural and uses the same kind encoding as
+  bindings (Stage 1's array code, the list/map/pointer codes, and the
+  anonymous-union interning): two type values are equal iff their
+  encodings match. An anonymous union type value is equal to a named
+  union type with the same member signature through the interning table.
+- An unknown type name in word position fails with `E340`, like any other
+  type use.
 
-- [x] 5.1.1 Remove the function-level `unsafe_depth` increment so an unsafe
-  function's body is not an unsafe context; `E370` fires for unsafe calls
-  and unsafe builtins outside an active block, including inside unsafe
-  functions.
-- [x] 5.1.2 Update the `E370` message, help text, and explain entry: drop
-  the "mark the enclosing function 'unsafe function'" alternative.
-- [x] 5.1.3 Mirror the rule in the interpreter's runtime backstop for
-  module units.
+- [ ] 5.1.1 Parser: type words for generic and anonymous union types; the
+  `TypeValue` AST node carries the full type.
+- [ ] 5.1.2 Checker and interpreter compare type values structurally;
+  `a typeof array<i32 3> ==` and `u typeof |i32 string| ==` work.
+- [ ] 5.2.1 The parse-time `dup` clone list (Stage 1 of the previous plan)
+  stays correct for the new type-value words.
 
-Acceptance: `mem.allocate call` directly in an unsafe function's body fails
-with `E370` pointing at the call; the same body with the ops wrapped in
-`unsafe ... end` runs; 11_unsafe_pointers and 00_grammar_tour pass
-unchanged; calling an unsafe function inside a block in a plain function
-still runs; the std modules still load.
+Acceptance: p24 runs (array and list typeof comparisons); a union typeof
+compares equal to its anonymous signature; `i32` type values are
+unchanged; the corpus still passes.
 
-## Stage 6: Diagnostic and driver quality
+## Stage 6: `for` over a hashmap
 
-Two small gaps found by the audit's probes; both are user-reachable today.
+`SYNTAX.md` says the iterable form "iterates containers", and
+`GRAMMAR.md` names `hashmap<K V>` a container. `m for` fails with `E394`
+(interpreter) and `E313` (checker) (probe p13).
 
-- [x] 6.1.1 Out-of-scope alias: `io.write_line call` in a unit where `io`
-  was required inside another function's scope reports `E393` "interpreter
-  does not support method call / complex call target yet". The scoping
-  behavior is correct; the diagnostic is wrong. Resolve the qualified
-  call target against the visible aliases and report the first unknown
-  segment with `E399` (unknown alias or module), reserving the `E393`
-  fallback for targets that are syntactically valid but not yet supported.
-- [x] 6.1.2 Add `E399` to the explain catalog: the alias is not in scope
-  here; require the module in this unit or use the function's own scope.
-- [x] 6.2.1 Bare relative source path: `Session::interpret_source` adds
-  the source file's parent directory as a module search path only when it
-  is non-empty, so `yarrow 12_modules.yar` run from inside the file's
-  directory resolves no sibling modules (`E380`), while the same file by
-  absolute path works. When the parent is empty, add `.` instead.
+Recorded implementation decisions (Stage 6):
 
-Acceptance: the out-of-scope alias probe fails with `E399` naming `io`;
-running `yarrow 12_modules.yar` with the shell inside
-`docs/examples/valid/` passes, as does the absolute-path invocation; the
+- A hashmap iterable walks its values in insertion order. `loop.value`
+  pushes the current value with the same copy/borrow semantics as list
+  elements; `loop.index` is not available and keeps the existing
+  "not available in this for" diagnostic. Keys stay reachable through
+  `std.map`; pairs are not a language value.
+- The `E394` and `E313` messages shrink to the genuinely invalid sources.
+
+- [ ] 6.1.1 The runtime `for` dispatch accepts hashmap iterables with the
+  semantics above.
+- [ ] 6.1.2 The checker accepts hashmap sources for the main unit.
+- [ ] 6.1.3 p13 runs and prints its line after iterating both values.
+
+Acceptance: p13 runs; array and list iteration are unchanged;
+`loop.break` and `loop.continue` work in a hashmap loop; the corpus still
+passes.
+
+## Stage 7: `const` accepts one runtime `set`
+
+`GRAMMAR.md`'s variable comment reads "const - set once at runtime". The
+interpreter rejects every `name set` on a const binding with `E378`
+(probe p09).
+
+Recorded implementation decisions (Stage 7):
+
+- A const binding accepts exactly one `name set` after its declaration.
+  The set follows the mutable rules (coercion allowed, old value dropped,
+  borrow released first). A second set fails with `E378`; the message and
+  explain entry say the binding already received its one set.
+- Reading of the spec: the const line uses the `set` keyword in the same
+  breath as the mutable line's "reassign with `name set`", and static is
+  the zero-set variant. The alternative reading (the initializer is the
+  one set) matches today's behavior but leaves the sentence with no work
+  to do. The decision is recorded here; `GRAMMAR.md` is not edited.
+- The checker tracks the one-set state for the main unit; the interpreter
+  backstops module units and the REPL.
+
+- [ ] 7.1.1 Checker: allow the first set on a const binding, reject the
+  second with `E378`; update the `E378` message and explain entry.
+- [ ] 7.1.2 Interpreter: mirror the rule for module units.
+- [ ] 7.1.3 The never-written warning (`21_warning_never_written`) stays
+  correct: a const that is never set does not warn.
+
+Acceptance: p09 runs (the first set binds, the second fails with `E378`);
+the corpus and the warning examples pass unchanged.
+
+## Stage 8: The documented coercion matrix
+
+`TYPE_SYSTEM.md`'s "Allowed implicit coercions" table documents
+integer-to-float (convert), float-to-integer (saturating convert),
+bool-to-integer (`0`/`1`, then widen), and integer-to-bool (non-zero to
+`true`) at the five coercion sites. The implementation coerces only
+within integers or within floats; probe p42 fails all four with `E310`.
+`GRAMMAR.md` says only "implicit coercion to Type allowed" and stays
+authoritative on where coercion applies; the matrix is the derived doc's
+specification of what converts.
+
+Recorded implementation decisions (Stage 8):
+
+- Implement the four conversions at the five sites `TYPE_SYSTEM.md`
+  lists: variable declarations, function parameters, `set`,
+  container/struct literal elements, and `handle` fallback.
+  Integer-to-integer and float-to-float coercion are unchanged;
+  struct-to-struct and `reference<T>`-to-`pointer<T>` stay non-implicit.
+- Integer narrowing keeps its current fit check: a narrowing coercion
+  must preserve the value (probe p47), and an out-of-range narrowing
+  stays `E310`. The table's "widen or narrow" is read as
+  value-preserving.
+- float-to-integer saturates: NaN to 0, out of range to the nearest
+  bound.
+- `E310`'s message and help text are rewritten to name the matrix and
+  drop the stale `\convert the value` advice; no `\` operator exists in
+  the grammar or the tokenizer.
+
+- [ ] 8.1.1 Checker: the four conversions at all coercion sites; `E310`
+  only for the rest.
+- [ ] 8.1.2 Interpreter: mirror the rule for module units and the REPL.
+- [ ] 8.1.3 Update `E310`'s message, help text, and explain entry.
+
+Acceptance: p42 runs (all four conversions plus mixed promotion); p47
+still narrows fitting values and still rejects `1000 z const u8` with
+`E310`; the corpus still passes.
+
+## Stage 9: Unicode rune literals
+
+The EBNF has `rune_char = ? any character except ' or \ ?`. The tokenizer
+counts bytes, so a multi-byte character like `'é'` fails with `E133`
+"rune literals must contain exactly one character or escape sequence"
+(probe p40), although `decode_rune_literal` already yields a Unicode
+code point and rune storage is already a 4-byte code point (kind 11).
+
+Recorded implementation decisions (Stage 9):
+
+- A rune literal holds one Unicode scalar value. The tokenizer counts
+  scalar values, not bytes; no layout or runtime change is needed.
+
+- [ ] 9.1.1 Fix the tokenizer's rune-length check to count characters;
+  `'é'` tokenizes and evaluates to its code point.
+
+Acceptance: `'é' typeof rune ==` runs; `'a'`, `'\n'`, and `'\''` are
+unchanged; the corpus still passes.
+
+## Stage 10: Diagnostic quality
+
+Three small gaps found by the audit's probes; all are user-reachable
+today.
+
+- [ ] 10.1.1 Bare error member case: `BASE_ONE case` inside `handle`
+  reports `E308` "match type dispatch requires a union subject", which
+  names the wrong problem; the qualified forms work (probe p23 versus
+  p23b). Keep requiring the qualified form, but when the word before
+  `case` is a bare identifier that names a known error member, report an
+  `E308` message that names the member and the two accepted forms
+  (`Type.MEMBER case`, `error.MEMBER case`).
+- [ ] 10.2.1 Invalid identifier: `_x` (the EBNF requires identifiers to
+  start with a letter) currently surfaces as `E362` "missing operand for
+  value" (probe p29). The tokenizer rejects identifiers that do not
+  start with a letter with the reserved `E134` and a message that names
+  the rule.
+- [ ] 10.3.1 `void` binding: `5 x mutable void` is accepted silently
+  (probe p46), although `void` marks an empty return and is not a stack
+  value. Reject `void` as a declared binding or parameter type with the
+  reserved `E400`, added to the explain catalog: use a real type, or
+  drop the value instead of binding it.
+
+Acceptance: the p23 probe names the qualified forms; `_x` fails with
+`E134` at the right span; `5 x mutable void` fails with `E400`; the
 corpus still passes.
 
 ## Verification
@@ -337,10 +384,10 @@ for f in docs/examples/valid/*.yar; do
 done
 ```
 
-Probe programs for the acceptance criteria above live in `/tmp/yarrow-audit3/`
-from the audit session; recreate them from the criteria text if that
-directory is gone. Per AGENTS.md, do not add automated tests; tests come
-later.
+Probe programs for the acceptance criteria above live in
+`/tmp/yarrow-audit4/` from the audit session; recreate them from the
+criteria text if that directory is gone. Per AGENTS.md, do not add
+automated tests; tests come later.
 
 When the last stage closes, refresh the corpus list in the module doc of
 `src/interpreter/mod.rs` (the maintenance rule of the previous plans still

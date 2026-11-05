@@ -555,6 +555,26 @@ fn free_struct(s: u64, id: u32) {
         if tag(desc.kind) <= 15 || desc.kind == KIND_PTR {
             continue;
         }
+        // A fixed-size array field stores its elements inline in the struct
+        // allocation (Stage 1): free each element by its own kind instead of
+        // treating the field bits as a heap pointer.
+        if tag(desc.kind) == KIND_ARRAY {
+            let elem_kind = (desc.kind >> 8) & 0xffff_ffff;
+            let count = desc.kind >> 40;
+            let step = kind_size(elem_kind);
+            for i in 0..count as usize {
+                let mut buf = 0u64;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (s as *const u8).add(desc.offset as usize + i * step),
+                        &mut buf as *mut u64 as *mut u8,
+                        step,
+                    );
+                }
+                free_value(buf, elem_kind);
+            }
+            continue;
+        }
         unsafe {
             let value =
                 std::ptr::read_unaligned((s as *const u8).add(desc.offset as usize) as *const u64);
@@ -776,6 +796,18 @@ fn clone_map(m: u64, key_kind: u64, val_kind: u64) -> u64 {
     }
 }
 
+/// Byte size of one field of a registered struct descriptor. A fixed-size
+/// array field (Stage 1) stores `count` elements inline, so its size is the
+/// element size times the count; every other field is one kind-sized value.
+fn field_desc_size(kind: u64) -> usize {
+    if tag(kind) == KIND_ARRAY {
+        let elem_kind = (kind >> 8) & 0xffff_ffff;
+        (kind >> 40) as usize * kind_size(elem_kind)
+    } else {
+        kind_size(kind)
+    }
+}
+
 /// Clone a struct block: copy the storage byte-for-byte, then replace every
 /// heap field with a clone of the original field. The block size is derived
 /// from the registered field descriptors (an upper bound of the compiler's
@@ -788,13 +820,41 @@ fn clone_struct(s: u64, id: u32) -> u64 {
     };
     let mut size = 0usize;
     for d in &descs {
-        size = size.max(d.offset as usize + kind_size(d.kind));
+        size = size.max(d.offset as usize + field_desc_size(d.kind));
     }
     size = size.max(1);
     let new = unsafe { libc::malloc(size) } as u64;
     unsafe { std::ptr::copy_nonoverlapping(s as *const u8, new as *mut u8, size) };
     for d in &descs {
         if tag(d.kind) <= 15 || d.kind == KIND_PTR {
+            continue;
+        }
+        // A fixed-size array field stores its elements inline (Stage 1):
+        // clone each heap element in place instead of treating the field
+        // bits as one heap pointer.
+        if tag(d.kind) == KIND_ARRAY {
+            let elem_kind = (d.kind >> 8) & 0xffff_ffff;
+            let count = (d.kind >> 40) as usize;
+            let step = kind_size(elem_kind);
+            if tag(elem_kind) <= 15 {
+                continue;
+            }
+            for i in 0..count {
+                let mut buf = 0u64;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (s as *const u8).add(d.offset as usize + i * step),
+                        &mut buf as *mut u64 as *mut u8,
+                        step,
+                    );
+                    let cloned = yarrow_value_clone(buf, elem_kind);
+                    std::ptr::copy_nonoverlapping(
+                        &cloned as *const u64 as *const u8,
+                        (new as *mut u8).add(d.offset as usize + i * step),
+                        step,
+                    );
+                }
+            }
             continue;
         }
         unsafe {
