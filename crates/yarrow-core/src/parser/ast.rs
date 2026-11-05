@@ -202,8 +202,10 @@ pub enum Expr {
         member: String,
     },
     /// A type used as a value (e.g. the `i32` in `myVar typeof i32 ==`).
+    /// Stage 5: carries the full type, so generic and anonymous union
+    /// type words are type values too (`array<i32 3>`, `|i32 string|`).
     TypeValue {
-        name: String,
+        ty: Type,
     },
     Binary {
         op: BinOp,

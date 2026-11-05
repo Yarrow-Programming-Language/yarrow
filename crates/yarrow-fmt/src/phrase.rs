@@ -350,7 +350,10 @@ pub fn expr_tokens(expr: &Expr) -> Vec<String> {
             vec![value.clone()]
         }
         Expr::Bool { value } => vec![if *value { "true" } else { "false" }.into()],
-        Expr::Variable { name } | Expr::TypeValue { name } => vec![name.clone()],
+        Expr::Variable { name } => vec![name.clone()],
+        // Stage 5: the type value carries the full type; it prints as
+        // one word (`i32`, `array<i32 3>`, `|i32 string|`).
+        Expr::TypeValue { ty } => vec![crate::print::format_type(ty)],
         Expr::Member { base, member } => {
             let mut tokens = expr_tokens(base);
             if let Some(last) = tokens.last_mut() {

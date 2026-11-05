@@ -288,16 +288,47 @@ Recorded implementation decisions (Stage 5):
 - An unknown type name in word position fails with `E340`, like any other
   type use.
 
-- [ ] 5.1.1 Parser: type words for generic and anonymous union types; the
+- [x] 5.1.1 Parser: type words for generic and anonymous union types; the
   `TypeValue` AST node carries the full type.
-- [ ] 5.1.2 Checker and interpreter compare type values structurally;
+- [x] 5.1.2 Checker and interpreter compare type values structurally;
   `a typeof array<i32 3> ==` and `u typeof |i32 string| ==` work.
-- [ ] 5.2.1 The parse-time `dup` clone list (Stage 1 of the previous plan)
+- [x] 5.2.1 The parse-time `dup` clone list (Stage 1 of the previous plan)
   stays correct for the new type-value words.
 
 Acceptance: p24 runs (array and list typeof comparisons); a union typeof
 compares equal to its anonymous signature; `i32` type values are
 unchanged; the corpus still passes.
+
+Stage 5 findings, recorded when the stage closed:
+
+- The checker needed no new comparison rule: a type value word already
+  pushes the `TypeValue` family and two type values are comparable, so
+  the parser change alone fixes the `E311` (the old failure parsed `<`
+  as a comparison and compared a type value with an integer). The
+  checker does not resolve type names inside words (same as bare named
+  type words), so an unknown name inside a generic type word stays the
+  interpreter's `E340` backstop.
+- Union interning is bidirectional. A named union whose signature was
+  interned earlier (for example by a struct field) reuses that id and
+  wins the union's label; the signature leaves the anonymous table, so
+  a second named union with the same members stays its own type. An
+  anonymous type value finds a named union with the same signature
+  through the table (the first declared wins). Both declaration orders
+  were verified (probes p24b and p24c, recreated in
+  `/tmp/yarrow-audit4/`).
+- The `dup`/`swap`/`rot` parse-time lists match `TypeValue` structurally,
+  so the new words clone and reorder at parse time with no code change
+  (probe p24d). The formatter spells the new words from the carried type
+  (`array<i32 3>`, `|i32 string|`) and expands a parse-time `dup` into the
+  cloned words, exactly as `i32 dup` already did.
+- A `reference<T>` type value compares equal to a reference binding's
+  `typeof` because both report the pointee kind, matching the existing
+  typeof rule for references. All five generic heads were verified
+  (probe p24f).
+- The `type` primitive (not in the EBNF's `primitive_type`) now fails
+  with `E340` "type 'type' has no value representation" both as a word
+  and as a declared binding type, replacing the old `E302`/`E393` pair
+  on those paths. The `error` word keeps its pre-existing `E230`.
 
 ## Stage 6: `for` over a hashmap
 

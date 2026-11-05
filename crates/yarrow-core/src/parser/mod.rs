@@ -1053,13 +1053,27 @@ impl Parser {
                 note_op_span(op_spans, tok.span());
             }
             TokenKind::Identifier | TokenKind::Error => {
-                let (name, mut span) = if self.peek_kind() == TokenKind::Error {
+                let (name, mut span, location) = if self.peek_kind() == TokenKind::Error {
                     let tok = self.advance();
-                    ("error".to_string(), tok.span())
+                    ("error".to_string(), tok.span(), tok.location)
                 } else {
                     let tok = self.advance();
-                    (tok.lexeme.clone(), tok.span())
+                    (tok.lexeme.clone(), tok.span(), tok.location)
                 };
+                // Stage 5: a generic type head followed by '<' is a type
+                // value word (`array<i32 3>`), like the bare primitive
+                // names below.
+                if is_generic_type_head(&name) && self.peek_kind() == TokenKind::Less {
+                    self.advance(); // '<'
+                    let args = self.parse_type_args(location)?;
+                    let kind = self.build_generic(&name, args, location)?;
+                    span = span.merge(self.prev_span());
+                    ops.push(Expr::TypeValue {
+                        ty: Type { kind, location },
+                    });
+                    note_op_span(op_spans, span);
+                    return Ok(());
+                }
                 let mut expr = Expr::variable(&name);
                 while self.match_kind(TokenKind::Dot) {
                     let member = self.expect_member_name("expected member name after '.'")?;
@@ -1072,11 +1086,26 @@ impl Parser {
                 // A bare primitive type name is a type value on the stack
                 // (e.g. the `i32` in `myVar typeof i32 ==`), not a variable.
                 // A dotted path (`error.CustomError`) stays a member access.
-                if matches!(expr, Expr::Variable { .. }) && Primitive::parse_name(&name).is_some() {
-                    ops.push(Expr::TypeValue { name });
+                if matches!(expr, Expr::Variable { .. })
+                    && let Some(primitive) = Primitive::parse_name(&name)
+                {
+                    ops.push(Expr::TypeValue {
+                        ty: Type {
+                            kind: TypeKind::Primitive(primitive),
+                            location,
+                        },
+                    });
                 } else {
                     ops.push(expr);
                 }
+                note_op_span(op_spans, span);
+            }
+            // Stage 5: a union type literal in word position is a type
+            // value (`|i32 string|`), like the bare primitive names above.
+            TokenKind::Pipe => {
+                let ty = self.parse_type()?;
+                let span = self.prev_span();
+                ops.push(Expr::TypeValue { ty });
                 note_op_span(op_spans, span);
             }
             TokenKind::Call => {
@@ -1414,16 +1443,12 @@ impl Parser {
         let location = self.peek_location();
         let mut underlying_span: Option<Span> = None;
         let underlying = match ops.last() {
-            Some(Expr::TypeValue { name }) => {
-                let name = name.clone();
+            // Stage 5: the type value carries the full type already.
+            Some(Expr::TypeValue { ty }) => {
+                let ty = ty.clone();
                 ops.pop();
                 underlying_span = op_spans.pop();
-                let kind = if let Some(p) = Primitive::parse_name(&name) {
-                    TypeKind::Primitive(p)
-                } else {
-                    TypeKind::Named(name)
-                };
-                Some(Type { kind, location })
+                Some(ty)
             }
             Some(Expr::Variable { name }) if ops.len() >= 2 => {
                 // Named underlying type that is not a primitive.
@@ -1901,6 +1926,13 @@ fn is_dupable_word(e: &Expr) -> bool {
             | Expr::StructLit(_)
             | Expr::EmptyMapOrStruct
     )
+}
+
+/// Stage 5: heads of the EBNF's `generic_type` production. In word
+/// position, one of these names followed by '<' starts a type value
+/// (`array<i32 3>`); anything else stays a variable or member access.
+fn is_generic_type_head(name: &str) -> bool {
+    matches!(name, "array" | "list" | "hashmap" | "pointer" | "reference")
 }
 
 fn binary_op(kind: TokenKind) -> Option<BinOp> {

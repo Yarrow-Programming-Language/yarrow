@@ -970,8 +970,6 @@ impl Interpreter {
             module,
             matches!(d.visibility, Some(Visibility::Public)),
         )?;
-        let id = self.unions.len() as u32;
-        self.union_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
         let mut member_types = Vec::new();
         for t in &d.types {
@@ -993,6 +991,20 @@ impl Interpreter {
                 ));
             }
         }
+        // Stage 5: a named union shares one id with an anonymous union of
+        // the same member signature that was interned earlier (e.g. by a
+        // struct field), so their type values compare equal. The named
+        // declaration wins the union's label; the signature leaves the
+        // anonymous table so a second named union with the same members
+        // stays its own type.
+        if let Some(&id) = self.anon_unions.get(&members) {
+            self.union_ids.insert(d.name.clone(), id);
+            self.unions[id as usize].name = d.name.clone();
+            self.anon_unions.remove(&members);
+            return Ok(());
+        }
+        let id = self.unions.len() as u32;
+        self.union_ids.insert(d.name.clone(), id);
         self.unions.push(UnionInfo {
             name: d.name.clone(),
             members,
@@ -1076,6 +1088,13 @@ impl Interpreter {
         }
         if let Some(id) = self.anon_unions.get(&members) {
             return Ok(*id);
+        }
+        // Stage 5: a named union with the same member signature is the
+        // same type: an anonymous union type value compares equal to it
+        // through the interning table.
+        if let Some(id) = self.unions.iter().position(|u| u.members == members) {
+            self.anon_unions.insert(members, id as u32);
+            return Ok(id as u32);
         }
         let id = self.unions.len() as u32;
         let name = format!(
@@ -3190,12 +3209,19 @@ impl Interpreter {
                 stack.push(self.bits_to_slot_kind(bits, field.kind, false));
                 Ok(())
             }
-            Expr::TypeValue { name } => {
-                // Primitives keep their direct kind code; other names resolve
-                // through the interpreter tables (struct, union, enum, error).
-                let kind = self.named_type_kind_code(name).ok_or_else(|| {
-                    InterpretError::new(format!("unknown type value '{name}'"), span, "E302")
-                })?;
+            Expr::TypeValue { ty } => {
+                // Stage 5: a type value carries the full type and pushes
+                // the same kind code a binding of that type would have,
+                // so typeof comparisons are structural. An anonymous
+                // union type value interns by member signature and
+                // compares equal to a named union with the same members.
+                let kind = match &ty.kind {
+                    TypeKind::Union(types) => {
+                        let id = self.intern_anon_union(types)?;
+                        KIND_UNION | ((id as u64) << 8)
+                    }
+                    _ => self.binding_type_kind(ty, module, &frame.local_aliases, span)?,
+                };
                 stack.push(Slot {
                     value: Value::Int(kind as i64),
                     kind: 4,
@@ -6018,8 +6044,15 @@ impl Interpreter {
         span: Span,
     ) -> IResult<u64> {
         match &ty.kind {
-            TypeKind::Primitive(p) => primitive_to_kind(*p)
-                .ok_or_else(|| InterpretError::unsupported(format!("binding type {ty:?}"), span)),
+            TypeKind::Primitive(p) => primitive_to_kind(*p).ok_or_else(|| {
+                // Only the `type` primitive has no kind code; it names no
+                // value type (Stage 5: a real diagnostic, not E393).
+                InterpretError::new(
+                    format!("type '{}' has no value representation", type_label(ty)),
+                    span,
+                    "E340",
+                )
+            }),
             TypeKind::Array { element, size } => {
                 let elem = self.binding_type_kind(element, current, local_aliases, span)?;
                 let count = size.unwrap_or(0);
