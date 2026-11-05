@@ -256,6 +256,11 @@ struct UnionInfo {
     name: String,
     /// Member type names / primitive tags in declaration order.
     members: Vec<MemberTy>,
+    /// Stage 2: the declared member types with references stripped, in
+    /// declaration order. A container literal bound to a union-typed
+    /// binding takes its type context from the first member of the
+    /// literal's shape.
+    member_types: Vec<Type>,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +279,14 @@ enum MemberTy {
     Primitive(u64),
     Named(String),
     String,
+    /// `list<T>` member: element kind code. The payload holds the list handle.
+    List(u64),
+    /// `hashmap<K V>` member: key and value kind codes. The payload holds
+    /// the map handle.
+    Hashmap(u64, u64),
+    /// `array<T N>` member: element kind code and element count. The
+    /// payload holds the elements inline (Stage 2: at most 8 bytes).
+    Array(u64, u64),
 }
 
 struct LoopCtx {
@@ -960,8 +973,10 @@ impl Interpreter {
         let id = self.unions.len() as u32;
         self.union_ids.insert(d.name.clone(), id);
         let mut members = Vec::new();
+        let mut member_types = Vec::new();
         for t in &d.types {
             members.push(self.member_ty(t)?);
+            member_types.push(strip_type_refs(t).clone());
         }
         // PLAN 5.3.1: union members must be distinct after the reference
         // stripping `member_ty` already applies.
@@ -981,11 +996,12 @@ impl Interpreter {
         self.unions.push(UnionInfo {
             name: d.name.clone(),
             members,
+            member_types,
         });
         Ok(())
     }
 
-    fn member_ty(&self, t: &Type) -> IResult<MemberTy> {
+    fn member_ty(&mut self, t: &Type) -> IResult<MemberTy> {
         match &t.kind {
             TypeKind::Primitive(Primitive::String) => Ok(MemberTy::String),
             TypeKind::Named(n) if n == "string" => Ok(MemberTy::String),
@@ -997,6 +1013,36 @@ impl Interpreter {
             }
             TypeKind::Named(n) => Ok(MemberTy::Named(n.clone())),
             TypeKind::Reference { inner } => self.member_ty(inner),
+            // Stage 2: container members. `list<T>` and `hashmap<K V>` store
+            // their heap handle in the payload; `array<T N>` stores its
+            // elements inline. The element kind codes come from
+            // `field_layout`, which also rejects encodings that do not fit
+            // their embedding width.
+            TypeKind::List { element } => {
+                let (ek, _, _) = self.field_layout(element)?;
+                Ok(MemberTy::List(ek))
+            }
+            TypeKind::Hashmap { key, value } => {
+                let (kk, _, _) = self.field_layout(key)?;
+                let (vk, _, _) = self.field_layout(value)?;
+                Ok(MemberTy::Hashmap(kk, vk))
+            }
+            TypeKind::Array { .. } => {
+                let (kind, inline, _) = self.field_layout(t)?;
+                // The union payload is one u64; an array member must fit.
+                if inline > 8 {
+                    return Err(InterpretError::new(
+                        format!(
+                            "union member '{}' needs {inline} bytes inline, which exceeds \
+                             the 8-byte union payload",
+                            type_label(t)
+                        ),
+                        Span::default(),
+                        "E340",
+                    ));
+                }
+                Ok(MemberTy::Array((kind >> 8) & 0xffff_ffff, kind >> 40))
+            }
             _ => Err(InterpretError::unsupported(
                 format!("union member {t:?}"),
                 Span::default(),
@@ -1009,10 +1055,12 @@ impl Interpreter {
     /// interned union registers in `self.unions` like a named union, so
     /// wrapping, matching, and freeing treat it identically.
     fn intern_anon_union(&mut self, types: &[Type]) -> IResult<u32> {
-        let members = types
-            .iter()
-            .map(|t| self.member_ty(t))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut members = Vec::new();
+        let mut member_types = Vec::new();
+        for t in types {
+            members.push(self.member_ty(t)?);
+            member_types.push(strip_type_refs(t).clone());
+        }
         // PLAN 5.3.1: union members must be distinct, named or anonymous.
         for (i, m) in members.iter().enumerate() {
             if members[..i].contains(m) {
@@ -1041,6 +1089,7 @@ impl Interpreter {
         self.unions.push(UnionInfo {
             name,
             members: members.clone(),
+            member_types,
         });
         self.anon_unions.insert(members, id);
         Ok(id)
@@ -1051,7 +1100,69 @@ impl Interpreter {
         match m {
             MemberTy::String => "string".to_string(),
             MemberTy::Named(n) => n.clone(),
+            MemberTy::List(ek) => format!("list<{}>", self.kind_code_label(*ek)),
+            MemberTy::Hashmap(kk, vk) => {
+                format!(
+                    "hashmap<{} {}>",
+                    self.kind_code_label(*kk),
+                    self.kind_code_label(*vk)
+                )
+            }
+            MemberTy::Array(ek, count) => {
+                format!("array<{} {count}>", self.kind_code_label(*ek))
+            }
             MemberTy::Primitive(kind) => match *kind & 0xff {
+                0 => "bool".to_string(),
+                1 => "i8".to_string(),
+                2 => "i16".to_string(),
+                3 => "i32".to_string(),
+                4 => "i64".to_string(),
+                6 => "u8".to_string(),
+                7 => "u16".to_string(),
+                8 => "u32".to_string(),
+                9 => "u64".to_string(),
+                11 => "rune".to_string(),
+                12 => "f16".to_string(),
+                13 => "f32".to_string(),
+                14 => "f64".to_string(),
+                _ => format!("kind {kind}"),
+            },
+        }
+    }
+
+    /// Human-readable spelling of a runtime kind code, for member labels.
+    /// Named ids resolve back through the interpreter's tables.
+    fn kind_code_label(&self, kind: u64) -> String {
+        match kind & 0xff {
+            KIND_STRING => "string".to_string(),
+            KIND_LIST => format!("list<{}>", self.kind_code_label(kind >> 8)),
+            KIND_MAP => format!(
+                "hashmap<{} {}>",
+                self.kind_code_label((kind >> 8) & 0xffff_ffff),
+                self.kind_code_label(kind >> 40)
+            ),
+            KIND_ARRAY => format!(
+                "array<{} {}>",
+                self.kind_code_label((kind >> 8) & 0xffff_ffff),
+                kind >> 40
+            ),
+            KIND_PTR => format!("pointer<{}>", self.kind_code_label(kind >> 8)),
+            KIND_STRUCT => self
+                .structs
+                .get((kind >> 8) as usize)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| format!("kind {kind}")),
+            KIND_UNION => self
+                .unions
+                .get((kind >> 8) as usize)
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| format!("kind {kind}")),
+            KIND_ENUM => self
+                .enums
+                .get((kind >> 8) as usize)
+                .map(|e| e.name.clone())
+                .unwrap_or_else(|| format!("kind {kind}")),
+            _ => match kind & 0xff {
                 0 => "bool".to_string(),
                 1 => "i8".to_string(),
                 2 => "i16".to_string(),
@@ -1762,6 +1873,9 @@ impl Interpreter {
             MemberTy::String => Some(KIND_STRING),
             MemberTy::Primitive(k) => Some(*k),
             MemberTy::Named(n) => self.named_type_kind_code(n),
+            MemberTy::List(ek) => Some(KIND_LIST | (ek << 8)),
+            MemberTy::Hashmap(kk, vk) => Some(KIND_MAP | (kk << 8) | (vk << 40)),
+            MemberTy::Array(ek, count) => Some(KIND_ARRAY | (ek << 8) | (count << 40)),
         }
     }
 
@@ -1775,6 +1889,9 @@ impl Interpreter {
         }
         match slot.kind & 0xff {
             KIND_STRING => MemberTy::String,
+            KIND_LIST => MemberTy::List(slot.kind >> 8),
+            KIND_MAP => MemberTy::Hashmap((slot.kind >> 8) & 0xffff_ffff, slot.kind >> 40),
+            KIND_ARRAY => MemberTy::Array((slot.kind >> 8) & 0xffff_ffff, slot.kind >> 40),
             k if k <= 15 => MemberTy::Primitive(k),
             _ => MemberTy::Primitive(slot.kind),
         }
@@ -1954,35 +2071,42 @@ impl Interpreter {
                             }
                             other => {
                                 self.eval_expr(other, stack, frame, module, caller_fq, *last_span)?;
-                                let mut s = self.pop(stack, stmt.span, "value")?;
-                                s = self.coerce_to_binding(
-                                    s,
-                                    ty,
-                                    module,
-                                    &frame.local_aliases,
-                                    stmt.span,
-                                )?;
-                                s.kind = kind;
-                                s
+                                self.pop(stack, stmt.span, "value")?
                             }
                         }
                     }
                     Some(e) => {
                         self.eval_expr(e, stack, frame, module, caller_fq, stmt.span)?;
                         let mut s = self.pop(stack, stmt.span, "value")?;
-                        s =
-                            self.coerce_to_binding(s, ty, module, &frame.local_aliases, stmt.span)?;
-                        s.kind = kind;
+                        // Stage 2: an array literal bound to a union adopts
+                        // the union's array member kind, so the wrap matches
+                        // the declared member (element bits are raw, like a
+                        // directly bound array literal).
+                        if matches!(e, Expr::Array(_))
+                            && (s.kind & 0xff) == KIND_ARRAY
+                            && let TypeKind::Named(n) = &ty.kind
+                            && let Ok(TypeRef::Union(uid)) =
+                                self.resolve_type_use(n, module, &frame.local_aliases)
+                            && let Some(member) = self
+                                .union_member_of_shape(uid, |k| matches!(k, TypeKind::Array { .. }))
+                        {
+                            s.kind = self.binding_type_kind(
+                                &member,
+                                module,
+                                &frame.local_aliases,
+                                stmt.span,
+                            )?;
+                        }
                         s
                     }
-                    None => {
-                        let mut s = self.pop(stack, stmt.span, "value")?;
-                        s =
-                            self.coerce_to_binding(s, ty, module, &frame.local_aliases, stmt.span)?;
-                        s.kind = kind;
-                        s
-                    }
+                    None => self.pop(stack, stmt.span, "value")?,
                 };
+                // Stage 2: a union-typed binding wraps its initializer into
+                // the union, container literals included; every binding
+                // then takes its declared kind, which also coerces scalar
+                // literals.
+                slot = self.coerce_to_binding(slot, ty, module, &frame.local_aliases, stmt.span)?;
+                slot.kind = kind;
                 // PLAN 1.3: `array<T>` with no declared size infers `N` from
                 // a non-empty array literal. An explicit `N` always wins
                 // (inference only runs for `size: None`); an empty literal
@@ -2380,6 +2504,7 @@ impl Interpreter {
                                     | Value::Int(_)
                                     | Value::Float(_)
                                     | Value::Bool(_)
+                                    | Value::Array(_)
                             )
                         )
                     {
@@ -2391,6 +2516,9 @@ impl Interpreter {
                                 *h == payload_bits
                             }
                             (Value::Int(n), MemberTy::Primitive(_)) => *n as u64 == payload_bits,
+                            (Value::Array(elems), MemberTy::Array(ek, count)) => {
+                                array_payload_bits(elems, *ek, *count) == Some(payload_bits)
+                            }
                             (Value::Heap { handle: h, .. }, _) => *h == payload_bits,
                             _ => false,
                         };
@@ -5147,6 +5275,40 @@ impl Interpreter {
                             kind: KIND_STRUCT | ((sid as u64) << 8),
                         });
                     }
+                    // Stage 2: a union-typed binding types an empty `{}`
+                    // through the union's first hashmap member.
+                    Ok(TypeRef::Union(uid)) => {
+                        let member = self
+                            .union_member_of_shape(uid, |k| matches!(k, TypeKind::Hashmap { .. }))
+                            .ok_or_else(|| {
+                                InterpretError::new(
+                                    format!("cannot convert into union '{n}'"),
+                                    span,
+                                    "E309",
+                                )
+                            })?;
+                        match member.kind {
+                            TypeKind::Hashmap { key, value } => {
+                                let (kk, _, _) = self.field_layout(&key)?;
+                                let (vk, _, _) = self.field_layout(&value)?;
+                                let keys_string = u64::from(kk == KIND_STRING);
+                                let handle = runtime::yarrow_map_new(keys_string);
+                                return Ok(Slot {
+                                    value: Value::Heap {
+                                        handle,
+                                        owned: true,
+                                    },
+                                    kind: KIND_MAP | (kk << 8) | (vk << 40),
+                                });
+                            }
+                            _ => {
+                                return Err(InterpretError::unsupported(
+                                    format!("empty `{{}}` for type '{n}'"),
+                                    span,
+                                ));
+                            }
+                        }
+                    }
                     Ok(_) => {}
                     Err(e) => return Err(Self::type_use_err(n, e, span)),
                 }
@@ -5205,7 +5367,18 @@ impl Interpreter {
                     kind: 0x60 | (ek << 8) | (count << 40),
                 })
             }
-            _ => Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395")),
+            // Stage 2: a union-typed binding types an empty `[]` through
+            // the union's first array member.
+            _ => match self.union_literal_context(
+                ty,
+                |k| matches!(k, TypeKind::Array { .. }),
+                module,
+                local_aliases,
+                span,
+            )? {
+                Some(member) => self.eval_empty_array(&member, module, local_aliases, span),
+                None => Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395")),
+            },
         }
     }
 
@@ -5221,20 +5394,41 @@ impl Interpreter {
         span: Span,
     ) -> IResult<Slot> {
         let elem_ty = match &ty.kind {
-            TypeKind::List { element } => element.as_ref(),
-            // PLAN 2.1.1: an empty `()` bound to a non-list type has no
-            // typed context.
-            _ if elems.is_empty() => {
-                return Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395"));
-            }
+            TypeKind::List { element } => (**element).clone(),
             _ => {
-                return Err(InterpretError::unsupported(
-                    format!("list literal type {ty:?}"),
+                // Stage 2: a union-typed binding types its list literal
+                // through the union's first list member.
+                match self.union_literal_context(
+                    ty,
+                    |k| matches!(k, TypeKind::List { .. }),
+                    module,
+                    &frame.local_aliases,
                     span,
-                ));
+                )? {
+                    Some(member) => match member.kind {
+                        TypeKind::List { element } => *element,
+                        _ => {
+                            return Err(InterpretError::unsupported(
+                                format!("list literal type {ty:?}"),
+                                span,
+                            ));
+                        }
+                    },
+                    // PLAN 2.1.1: an empty `()` bound to a non-list type has
+                    // no typed context.
+                    None if elems.is_empty() => {
+                        return Err(InterpretError::new(EMPTY_LIT_MSG, span, "E395"));
+                    }
+                    None => {
+                        return Err(InterpretError::unsupported(
+                            format!("list literal type {ty:?}"),
+                            span,
+                        ));
+                    }
+                }
             }
         };
-        let (ek, esize, _) = self.field_layout(elem_ty)?;
+        let (ek, esize, _) = self.field_layout(&elem_ty)?;
         // Stage 1: a list stores one u64 of bits per element, so a
         // fixed-size array element (inline, multi-word) cannot be pushed.
         if ek & 0xff == KIND_ARRAY {
@@ -5276,16 +5470,37 @@ impl Interpreter {
         span: Span,
     ) -> IResult<Slot> {
         let (key_ty, val_ty) = match &ty.kind {
-            TypeKind::Hashmap { key, value } => (key.as_ref(), value.as_ref()),
+            TypeKind::Hashmap { key, value } => ((**key).clone(), (**value).clone()),
             _ => {
-                return Err(InterpretError::unsupported(
-                    format!("map literal type {ty:?}"),
+                // Stage 2: a union-typed binding types its map literal
+                // through the union's first hashmap member.
+                match self.union_literal_context(
+                    ty,
+                    |k| matches!(k, TypeKind::Hashmap { .. }),
+                    module,
+                    &frame.local_aliases,
                     span,
-                ));
+                )? {
+                    Some(member) => match member.kind {
+                        TypeKind::Hashmap { key, value } => (*key, *value),
+                        _ => {
+                            return Err(InterpretError::unsupported(
+                                format!("map literal type {ty:?}"),
+                                span,
+                            ));
+                        }
+                    },
+                    None => {
+                        return Err(InterpretError::unsupported(
+                            format!("map literal type {ty:?}"),
+                            span,
+                        ));
+                    }
+                }
             }
         };
-        let (kk, _, _) = self.field_layout(key_ty)?;
-        let (vk, _, _) = self.field_layout(val_ty)?;
+        let (kk, _, _) = self.field_layout(&key_ty)?;
+        let (vk, _, _) = self.field_layout(&val_ty)?;
         let handle = runtime::yarrow_map_new(u64::from(kk == KIND_STRING));
         for (k, v) in pairs {
             self.eval_expr(k, stack, frame, module, caller_fq, span)?;
@@ -5311,6 +5526,41 @@ impl Interpreter {
             },
             kind: KIND_MAP | (kk << 8) | (vk << 40),
         })
+    }
+
+    /// Stage 2: the first declared member type of the given shape.
+    fn union_member_of_shape(&self, uid: u32, is_shape: fn(&TypeKind) -> bool) -> Option<Type> {
+        self.unions
+            .get(uid as usize)
+            .and_then(|u| u.member_types.iter().find(|t| is_shape(&t.kind)).cloned())
+    }
+
+    /// Stage 2: the member type that contexts a container literal bound to
+    /// a union-typed binding: the first declared member of the literal's
+    /// shape. `Ok(None)` when the declared type is not a union; a union
+    /// with no such member is `E309` (the literal cannot be a member
+    /// value).
+    fn union_literal_context(
+        &self,
+        ty: &Type,
+        is_shape: fn(&TypeKind) -> bool,
+        module: Option<&str>,
+        local_aliases: &HashMap<String, String>,
+        span: Span,
+    ) -> IResult<Option<Type>> {
+        let TypeKind::Named(n) = &ty.kind else {
+            return Ok(None);
+        };
+        match self.resolve_type_use(n, module, local_aliases) {
+            Ok(TypeRef::Union(uid)) => {
+                let member = self.union_member_of_shape(uid, is_shape).ok_or_else(|| {
+                    InterpretError::new(format!("cannot convert into union '{n}'"), span, "E309")
+                })?;
+                Ok(Some(member))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(Self::type_use_err(n, e, span)),
+        }
     }
 
     fn coerce_to_binding(
@@ -5440,12 +5690,38 @@ impl Interpreter {
                     "E309",
                 )
             })?;
-        let bits = slot.value.as_bits().unwrap_or(0);
-        // Transfer ownership into the union payload.
-        match slot.value {
-            Value::Str { owned: true, .. } | Value::Heap { owned: true, .. } => {}
-            other => other.drop_owned(),
-        }
+        // Transfer ownership into the union payload. Stage 2: an array
+        // member packs its elements inline (the payload is one u64); every
+        // other member stores its handle or scalar bits.
+        let bits = match slot.value {
+            Value::Array(elems) => {
+                let member_label = self.member_ty_label(&info.members[idx]);
+                let MemberTy::Array(ek, count) = &info.members[idx] else {
+                    for e in elems {
+                        e.drop_owned();
+                    }
+                    return Err(InterpretError::new(
+                        format!("cannot convert into union '{}'", info.name),
+                        span,
+                        "E309",
+                    ));
+                };
+                pack_array_payload(elems, *ek, *count, &member_label, span)?
+            }
+            Value::Str {
+                handle,
+                owned: true,
+            }
+            | Value::Heap {
+                handle,
+                owned: true,
+            } => handle,
+            other => {
+                let bits = other.as_bits().unwrap_or(0);
+                other.drop_owned();
+                bits
+            }
+        };
         let handle = runtime::yarrow_alloc(16);
         unsafe {
             std::ptr::write_unaligned(
@@ -5728,6 +6004,24 @@ impl Interpreter {
                 },
                 kind: KIND_STRING,
             },
+            // Stage 2: container members. A list or hashmap payload is the
+            // heap handle; an array payload holds its elements inline.
+            MemberTy::List(ek) => self.bits_to_slot_kind(bits, KIND_LIST | (*ek << 8), owned),
+            MemberTy::Hashmap(kk, vk) => {
+                self.bits_to_slot_kind(bits, KIND_MAP | (*kk << 8) | (*vk << 40), owned)
+            }
+            MemberTy::Array(ek, count) => {
+                let esize = kind_elem_size(*ek);
+                let mut elems = Vec::with_capacity(*count as usize);
+                for i in 0..*count {
+                    let ebits = (bits >> ((i as u32) * esize * 8)) & size_mask(esize);
+                    elems.push(self.bits_to_slot_kind(ebits, *ek, owned).value);
+                }
+                Slot {
+                    value: Value::Array(elems),
+                    kind: KIND_ARRAY | (*ek << 8) | (*count << 40),
+                }
+            }
             MemberTy::Primitive(k) => self.bits_to_slot_kind(bits, *k, owned),
             MemberTy::Named(n) => {
                 if let Some(id) = self.struct_ids.get(n) {
@@ -5927,6 +6221,15 @@ fn kind_elem_size(kind: u64) -> u32 {
     }
 }
 
+/// Stage 2: a declared union member type with its references stripped, the
+/// same normalization `member_ty` applies.
+fn strip_type_refs(t: &Type) -> &Type {
+    match &t.kind {
+        TypeKind::Reference { inner } => strip_type_refs(inner),
+        _ => t,
+    }
+}
+
 /// Human-readable spelling of a type, for field-layout diagnostics.
 fn type_label(ty: &Type) -> String {
     match &ty.kind {
@@ -6090,6 +6393,74 @@ fn ast_member_ty(t: &Type) -> MemberTy {
         TypeKind::Reference { inner } => ast_member_ty(inner),
         _ => MemberTy::Primitive(4),
     }
+}
+
+/// Stage 2: a low-byte mask for one inline array element of `esize` bytes.
+fn size_mask(esize: u32) -> u64 {
+    if esize >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (esize * 8)) - 1
+    }
+}
+
+/// Stage 2: pack an array value into the inline union payload, element bits
+/// in order at `esize`-byte strides. An owned heap element transfers into
+/// the payload; a borrowed one is cloned so the payload owns an
+/// independent copy (the same rule as an inline array struct field).
+fn pack_array_payload(
+    elems: Vec<Value>,
+    ek: u64,
+    count: u64,
+    label: &str,
+    span: Span,
+) -> IResult<u64> {
+    if elems.len() as u64 != count {
+        let got = elems.len();
+        for e in elems {
+            e.drop_owned();
+        }
+        return Err(InterpretError::new(
+            format!("union member '{label}' expects an array of {count} elements, got {got}"),
+            span,
+            "E340",
+        ));
+    }
+    let esize = kind_elem_size(ek);
+    let mut bits = 0u64;
+    for (i, e) in elems.into_iter().enumerate() {
+        let b = match e {
+            Value::Str {
+                handle: h,
+                owned: true,
+            }
+            | Value::Heap {
+                handle: h,
+                owned: true,
+            } => h,
+            Value::Str { handle: h, .. } => runtime::yarrow_value_clone(h, KIND_STRING),
+            Value::Heap { handle: h, .. } => runtime::yarrow_value_clone(h, ek),
+            other => other.as_bits().unwrap_or(0),
+        };
+        bits |= (b & size_mask(esize)) << ((i as u32) * esize * 8);
+    }
+    Ok(bits)
+}
+
+/// Stage 2: the inline payload bits of an array value, without consuming or
+/// cloning its elements; `None` when the element count does not match.
+/// Used to recognize an unconsumed match-arm payload.
+fn array_payload_bits(elems: &[Value], ek: u64, count: u64) -> Option<u64> {
+    if elems.len() as u64 != count {
+        return None;
+    }
+    let esize = kind_elem_size(ek);
+    let mut bits = 0u64;
+    for (i, e) in elems.iter().enumerate() {
+        let b = e.as_bits()?;
+        bits |= (b & size_mask(esize)) << ((i as u32) * esize * 8);
+    }
+    Some(bits)
 }
 
 fn members_compatible(want: &MemberTy, got: &MemberTy) -> bool {

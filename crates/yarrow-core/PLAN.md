@@ -130,15 +130,49 @@ Recorded implementation decisions (Stage 2):
   other arm, autoderefing on read.
 - Member types must still be distinct (`E385` unchanged).
 
-- [ ] 2.1.1 `member_ty` gains `List`, `Hashmap`, and `Array` arms with
+- [x] 2.1.1 `member_ty` gains `List`, `Hashmap`, and `Array` arms with
   the storage rules above; union registration sizes payloads correctly.
-- [ ] 2.1.2 Union init, `set`, and match arms work for container members;
+- [x] 2.1.2 Union init, `set`, and match arms work for container members;
   the arm in p36 reads the list back through the reference.
-- [ ] 2.2.1 The checker models container members for the main unit.
+- [x] 2.2.1 The checker models container members for the main unit.
 
 Acceptance: p36 and p39 run; a union with a list member round-trips
 through a match arm; duplicate member types still fail with `E385`; the
 corpus still passes.
+
+Stage 2 findings, recorded when the stage closed:
+
+- The union payload stays one `u64` ("sized to its largest member as
+  today": every member is at most 8 bytes). An `array<T N>` member must
+  therefore fit inline in 8 bytes (`N * element size <= 8`); a larger
+  array member is rejected with `E340` at registration instead of a
+  corrupted payload.
+- Container member element types resolve at registration through
+  `field_layout`, so a forward reference to a not-yet-registered named
+  element type (`U union list<S>` before `S struct`) fails with `E340`.
+  Named members keep their lazy name-based resolution.
+- A container literal as a union initializer takes its type context from
+  the first union member of the literal's shape: `(1 2) u mutable U`,
+  `{"a" 1}`, `[3 4]`, and the empty `()`/`{}`/`[]` all bind through the
+  member. A union with no member of the literal's shape fails with
+  `E309`. This closed the `E393` "list literal type" on that path. `set`
+  evaluates its value with no type context (pre-existing for every
+  container `set`), so a container literal in `name set` wraps by its
+  own kind and fails with `E309` when it does not match a member
+  exactly.
+- A match arm receives the payload as a borrowed reference for list and
+  hashmap members and as an unpacked copy for array members (inline
+  bits); an unconsumed array payload is recognized by repacking its
+  elements and dropped like every other unconsumed payload.
+- A union drop frees the union block and releases the active member's
+  payload handle exactly as string members behave today (the runtime
+  frees payloads only when member kinds are registered, which the
+  interpreter does not do; pre-existing and unchanged by this stage).
+- The checker keys container members by their full shape for `E385`
+  (`list<i32>` vs `list<string>` are distinct) and gives a union with a
+  container member the empty-literal typed context; binding and match
+  checks go through the existing opaque rules, with the interpreter
+  backstopping.
 
 ## Stage 3: `implement` on enums and unions
 

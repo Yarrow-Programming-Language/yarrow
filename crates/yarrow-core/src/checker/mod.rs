@@ -791,6 +791,26 @@ impl Checker {
     /// Copy types push a copy on read; non-copy types push a borrow. Named
     /// types that are not declared in this unit default to non-copy (module
     /// types are heap values at runtime).
+    /// Stage 2: whether a declared union type has a container member
+    /// (`list<T>`, `hashmap<K V>`, `array<T N>`, references stripped).
+    /// Such a union gives an empty `()`/`[]`/`{}` its typed context.
+    fn union_container_context(&self, ty: &Type) -> bool {
+        let TypeKind::Named(n) = &ty.kind else {
+            return false;
+        };
+        let Some(union) = self.decls.unions.get(n) else {
+            return false;
+        };
+        fn container_shape(t: &Type) -> bool {
+            match &t.kind {
+                TypeKind::List { .. } | TypeKind::Array { .. } | TypeKind::Hashmap { .. } => true,
+                TypeKind::Reference { inner } => container_shape(inner),
+                _ => false,
+            }
+        }
+        union.types.iter().any(container_shape)
+    }
+
     fn is_copy_type(&self, ty: &Type) -> bool {
         match &ty.kind {
             TypeKind::Primitive(p) => !matches!(p, Primitive::String),
@@ -1116,10 +1136,12 @@ impl Checker {
                 // PLAN 2.1.1: an empty `()`/`[]` is legal only as the
                 // value of a binding initializer whose declared type is a
                 // container (`list<T>`, `array<T N>`, `hashmap<K V>`).
+                // Stage 2: a union with a container member is such a
+                // context too (the member types the literal).
                 let container_ctx = matches!(
                     ty.kind,
                     TypeKind::List { .. } | TypeKind::Array { .. } | TypeKind::Hashmap { .. }
-                );
+                ) || self.union_container_context(ty);
                 let slot = match value {
                     Some(value) => {
                         self.check_binding_init(value, stmt.span, container_ctx);
@@ -2532,6 +2554,20 @@ fn union_member_key(t: &Type) -> Option<String> {
         TypeKind::Primitive(p) => Some(format!("prim:{p:?}")),
         TypeKind::Named(n) => Some(format!("named:{n}")),
         TypeKind::Reference { inner } => union_member_key(inner),
+        // Stage 2: container members are distinct by their full shape,
+        // mirroring the interpreter's kind-code comparison.
+        TypeKind::List { element } => Some(format!("list:<{}>", union_member_key(element)?)),
+        TypeKind::Hashmap { key, value } => Some(format!(
+            "hashmap:<{} {}>",
+            union_member_key(key)?,
+            union_member_key(value)?
+        )),
+        TypeKind::Array { element, size } => Some(format!(
+            "array:<{} {}>",
+            union_member_key(element)?,
+            size.map(|n| n.to_string())
+                .unwrap_or_else(|| "?".to_string())
+        )),
         _ => None,
     }
 }
@@ -2543,6 +2579,7 @@ fn union_member_label(t: &Type) -> String {
         TypeKind::Reference { inner } => union_member_label(inner),
         TypeKind::Named(n) => n.clone(),
         TypeKind::Primitive(p) => format!("{p:?}").to_lowercase(),
+        TypeKind::List { .. } | TypeKind::Hashmap { .. } | TypeKind::Array { .. } => type_label(t),
         _ => "member".to_string(),
     }
 }
