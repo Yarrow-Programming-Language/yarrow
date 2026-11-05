@@ -168,14 +168,27 @@ the pre-`if` height (`eval_cond`, `src/interpreter/mod.rs`: the
 The same folding feeds the `for` source words, so the restriction applies
 there too.
 
-- [ ] 3.1.1 In `eval_cond`, drop the height requirement. After evaluating
+Recorded implementation decisions (Stage 3):
+
+- Values the condition words leave below the bool stay on the stack; the
+  branch (or loop body) runs with them. The `if` handler's old clear back
+  to the pre-condition height was a no-op under the exact-height rule and
+  would have dropped those values, so it is gone.
+- The `for` body's balance check (`E325`) and per-iteration clears are
+  relative to the height the source words left the stack at, not the
+  pre-`for` height, in both loop forms. A condition-form loop still
+  re-evaluates its source before every iteration, so a source that consumes
+  values from before the `for` runs out of operands with the underflow
+  diagnostic (`E362`) once they are gone.
+
+- [x] 3.1.1 In `eval_cond`, drop the height requirement. After evaluating
   the condition words the stack must be non-empty (an empty result keeps
   the existing underflow diagnostic) and the top must be `bool`; pop it. A
   non-bool top keeps `E324` with the "condition must be bool" message.
-- [ ] 3.1.2 Apply the same model to the `for` source words (the runtime
+- [x] 3.1.2 Apply the same model to the `for` source words (the runtime
   bool-versus-iterable dispatch): the source words may consume prior stack
   values; only the popped top decides the loop form.
-- [ ] 3.1.3 Match case conditions keep their subject-relative behavior
+- [x] 3.1.3 Match case conditions keep their subject-relative behavior
   (words before `case` operate on the borrowed subject); verify the
   grammar tour idioms (`dup 85 == case`, `dup Color.RED == case`) are
   unchanged.

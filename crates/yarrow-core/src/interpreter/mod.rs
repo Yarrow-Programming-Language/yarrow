@@ -1932,11 +1932,9 @@ impl Interpreter {
                 then_branch,
                 else_branch,
             } => {
-                let pre = stack.len();
+                // PLAN 3.1.1: values the condition words left below the
+                // bool stay on the stack; the branch runs with them.
                 let cond = self.eval_cond(condition, stack, frame, module, caller_fq, stmt.span)?;
-                while stack.len() > pre {
-                    stack.pop().unwrap().drop_owned();
-                }
                 let branch = if cond { then_branch } else { else_branch };
                 Self::defer_enter_scope(frame);
                 let flow = self.eval_body(branch, stack, frame, module, caller_fq)?;
@@ -2230,7 +2228,10 @@ impl Interpreter {
         caller_fq: &str,
         span: Span,
     ) -> IResult<Flow> {
-        let pre = stack.len();
+        // PLAN 3.1.2: the source words are ordinary statements; they may
+        // consume values that were already on the stack, and whatever they
+        // left below the popped top stays. Only the popped top decides the
+        // loop form.
         self.eval_expr(source, stack, frame, module, caller_fq, span)?;
         let first = self.pop(stack, span, "'for' source")?;
         if frame.pending_flow.take().is_some() {
@@ -2240,13 +2241,11 @@ impl Interpreter {
         match first.value {
             Value::Bool(_) => {
                 first.drop_owned();
-                while stack.len() > pre {
-                    stack.pop().unwrap().drop_owned();
-                }
                 self.eval_cond_for(source, body, stack, frame, module, caller_fq, span)
             }
             Value::Array(_) | Value::Heap { .. } => {
-                self.eval_iter_for(pre, first, body, stack, frame, module, caller_fq, span)
+                let base = stack.len();
+                self.eval_iter_for(base, first, body, stack, frame, module, caller_fq, span)
             }
             other => {
                 other.drop_owned();
@@ -2279,6 +2278,9 @@ impl Interpreter {
             while stack.len() > pre {
                 stack.pop().unwrap().drop_owned();
             }
+            // PLAN 3.1.2: the condition words may consume values below
+            // `pre`; the body starts wherever they left the stack.
+            let base = stack.len();
             match frame.pending_flow.take() {
                 Some(Flow::Break) => break,
                 Some(_) => continue,
@@ -2298,7 +2300,7 @@ impl Interpreter {
             match flow {
                 Flow::Return => return Ok(Flow::Return),
                 Flow::Break => {
-                    while stack.len() > pre {
+                    while stack.len() > base {
                         stack.pop().unwrap().drop_owned();
                     }
                     break;
@@ -2306,7 +2308,7 @@ impl Interpreter {
                 Flow::Continue => continue,
                 Flow::Next => {}
             }
-            if stack.len() != pre {
+            if stack.len() != base {
                 return Err(InterpretError::new(
                     "for body must leave the stack balanced",
                     span,
@@ -2320,7 +2322,9 @@ impl Interpreter {
     #[allow(clippy::too_many_arguments)]
     fn eval_iter_for(
         &mut self,
-        pre: usize,
+        // PLAN 3.1.2: the body's balance reference is the height the
+        // source words left the stack at, not the pre-`for` height.
+        base: usize,
         iterable: Slot,
         body: &[Stmt],
         stack: &mut Vec<Slot>,
@@ -2332,7 +2336,7 @@ impl Interpreter {
         match iterable.value {
             Value::Array(elems) => {
                 for (i, elem) in elems.into_iter().enumerate() {
-                    while stack.len() > pre {
+                    while stack.len() > base {
                         stack.pop().unwrap().drop_owned();
                     }
                     let elem_slot = Slot {
@@ -2354,7 +2358,7 @@ impl Interpreter {
                     match flow {
                         Flow::Return => return Ok(Flow::Return),
                         Flow::Break => {
-                            while stack.len() > pre {
+                            while stack.len() > base {
                                 stack.pop().unwrap().drop_owned();
                             }
                             break;
@@ -2362,7 +2366,7 @@ impl Interpreter {
                         Flow::Continue => continue,
                         Flow::Next => {}
                     }
-                    if stack.len() != pre {
+                    if stack.len() != base {
                         return Err(InterpretError::new(
                             "for body must leave the stack balanced",
                             span,
@@ -2383,7 +2387,7 @@ impl Interpreter {
                 let elem_kind = iterable.kind >> 8;
                 let len = runtime::yarrow_list_len(handle);
                 for i in 0..len {
-                    while stack.len() > pre {
+                    while stack.len() > base {
                         stack.pop().unwrap().drop_owned();
                     }
                     let bits = runtime::yarrow_list_get(handle, i);
@@ -2429,7 +2433,7 @@ impl Interpreter {
                             return Ok(Flow::Return);
                         }
                         Flow::Break => {
-                            while stack.len() > pre {
+                            while stack.len() > base {
                                 stack.pop().unwrap().drop_owned();
                             }
                             break;
@@ -2437,7 +2441,7 @@ impl Interpreter {
                         Flow::Continue => continue,
                         Flow::Next => {}
                     }
-                    if stack.len() != pre {
+                    if stack.len() != base {
                         if owned {
                             free_value(handle, KIND_LIST);
                         }
@@ -2473,16 +2477,11 @@ impl Interpreter {
         caller_fq: &str,
         span: Span,
     ) -> IResult<bool> {
-        let before = stack.len();
+        // PLAN 3.1.1: the condition words are ordinary statements; they may
+        // consume values that were already on the stack. Only the popped
+        // top must be bool; whatever the words left below it stays.
         self.eval_expr(e, stack, frame, module, caller_fq, span)?;
-        if stack.len() != before + 1 {
-            return Err(InterpretError::new(
-                "condition must evaluate to a single value",
-                span,
-                "E324",
-            ));
-        }
-        let slot = stack.pop().unwrap();
+        let slot = self.pop(stack, span, "condition")?;
         match slot.value {
             Value::Bool(b) => Ok(b),
             other => {
