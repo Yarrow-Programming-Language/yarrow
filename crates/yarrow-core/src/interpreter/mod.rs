@@ -6253,8 +6253,37 @@ impl Interpreter {
             Err(TypeUseError::Private(unit)) => {
                 Err(Self::type_use_err(name, TypeUseError::Private(unit), span))
             }
-            Err(TypeUseError::Unknown) => Ok(()),
+            Err(TypeUseError::Unknown) => {
+                // Stage 10.1.1: a bare identifier that names a known
+                // error member is the unqualified form of an error
+                // member case; it can never match, so name the two
+                // accepted qualified forms instead of the union-subject
+                // message the dispatch would report.
+                if !name.contains('.')
+                    && let Some(owner) = self.error_declaring_type(name)
+                {
+                    return Err(InterpretError::new(
+                        format!(
+                            "match case '{name}' names an error member; \
+                             write it as '{owner}.{name} case' or 'error.{name} case'"
+                        ),
+                        span,
+                        "E308",
+                    ));
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// Stage 10.1.1: the error type that declares `member`, if any. Error
+    /// member tags are interned by name, so a bare case word naming a
+    /// member is unambiguous about the member but not about its type.
+    fn error_declaring_type(&self, member: &str) -> Option<String> {
+        self.error_types
+            .iter()
+            .find(|(_, members)| members.iter().any(|(n, _)| n == member))
+            .map(|(owner, _)| owner.clone())
     }
 
     /// PLAN 4.2.1: kind code of a binding's declared type. Named leaves
@@ -6269,15 +6298,28 @@ impl Interpreter {
         span: Span,
     ) -> IResult<u64> {
         match &ty.kind {
-            TypeKind::Primitive(p) => primitive_to_kind(*p).ok_or_else(|| {
-                // Only the `type` primitive has no kind code; it names no
-                // value type (Stage 5: a real diagnostic, not E393).
-                InterpretError::new(
-                    format!("type '{}' has no value representation", type_label(ty)),
-                    span,
-                    "E340",
-                )
-            }),
+            TypeKind::Primitive(p) => {
+                // Stage 10.3.1: void marks an empty return; it is not a
+                // stack value, so no binding or parameter can declare it
+                // (its kind code aliases i64, so it would bind silently).
+                if *p == Primitive::Void {
+                    return Err(InterpretError::new(
+                        "void marks an empty return and is not a stack value; \
+                         use a real type, or drop the value instead of binding it",
+                        span,
+                        "E400",
+                    ));
+                }
+                primitive_to_kind(*p).ok_or_else(|| {
+                    // Only the `type` primitive has no kind code; it names no
+                    // value type (Stage 5: a real diagnostic, not E393).
+                    InterpretError::new(
+                        format!("type '{}' has no value representation", type_label(ty)),
+                        span,
+                        "E340",
+                    )
+                })
+            }
             TypeKind::Array { element, size } => {
                 let elem = self.binding_type_kind(element, current, local_aliases, span)?;
                 let count = size.unwrap_or(0);

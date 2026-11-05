@@ -298,6 +298,18 @@ value, so members cannot take explicit values; an integer carrier's \
 explicit member values must fit the carrier's range.",
     },
     ExplainEntry {
+        code: "E400",
+        title: "void is not a binding type",
+        body: "\
+`void` marks a function with no return value; it is not a stack value, so a \
+binding or a parameter cannot declare it.
+
+Use a real type for the binding or parameter, or drop the value instead of \
+binding it. A function that returns nothing simply omits the `with` clause; \
+a fallible function with no success payload writes `with |void Err|`, where \
+`void` is the return union's success side and stays valid.",
+    },
+    ExplainEntry {
         code: "E999",
         title: "internal compiler error (ICE)",
         body: "\

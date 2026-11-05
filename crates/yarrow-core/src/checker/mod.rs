@@ -147,6 +147,9 @@ const CODE_CONDITION_NOT_BOOL: &str = "E313";
 /// Diagnostic code reserved for an empty `()`/`[]`/`{}` literal outside
 /// a typed context (PLAN 2.1.1).
 const CODE_EMPTY_LITERAL_UNTYPED: &str = "E395";
+/// Diagnostic code reserved for a `void` binding or parameter type
+/// (Stage 10.3.1): void marks an empty return, not a stack value.
+const CODE_VOID_TYPE: &str = "E400";
 
 /// Summary of one registered function. Rule groups consult this instead of
 /// the full AST body (e.g. the unsafe boundary of PLAN 3.5 needs
@@ -965,6 +968,22 @@ impl Checker {
         self.caller_fallible = self.check_return_signature(f);
 
         for param in &f.params {
+            // Stage 10.3.1: `void` marks an empty return; it is not a
+            // stack value, so a parameter cannot declare it.
+            if matches!(param.ty.kind, TypeKind::Primitive(Primitive::Void)) {
+                self.emit(
+                    Diagnostic::error(
+                        CODE_VOID_TYPE,
+                        format!(
+                            "cannot declare a parameter of '{}' as void: void marks an \
+                             empty return and is not a stack value",
+                            f.name
+                        ),
+                    )
+                    .with_primary(Span::from_location(param.ty.location), "")
+                    .with_help("use a real type, or drop the value instead of binding it"),
+                );
+            }
             let ty = self.resolve_type(&param.ty);
             let slot = match &param.ty.kind {
                 TypeKind::Reference { .. } => Slot::Unknown(ty),
@@ -1148,6 +1167,21 @@ impl Checker {
                 ty,
                 value,
             } => {
+                // Stage 10.3.1: `void` marks an empty return; it is not
+                // a stack value, so a binding cannot declare it.
+                if matches!(ty.kind, TypeKind::Primitive(Primitive::Void)) {
+                    self.emit(
+                        Diagnostic::error(
+                            CODE_VOID_TYPE,
+                            format!(
+                                "cannot declare '{name}' as void: void marks an empty \
+                                 return and is not a stack value"
+                            ),
+                        )
+                        .with_primary(stmt.span, "")
+                        .with_help("use a real type, or drop the value instead of binding it"),
+                    );
+                }
                 // PLAN 3.4.1: a `static` binding is a compile-time constant.
                 if *mutability == Mutability::Static {
                     self.check_static_init(name, value.as_ref(), stmt.span);

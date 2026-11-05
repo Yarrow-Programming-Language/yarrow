@@ -553,19 +553,19 @@ Stage 9 findings, recorded when the stage closed:
 Three small gaps found by the audit's probes; all are user-reachable
 today.
 
-- [ ] 10.1.1 Bare error member case: `BASE_ONE case` inside `handle`
+- [x] 10.1.1 Bare error member case: `BASE_ONE case` inside `handle`
   reports `E308` "match type dispatch requires a union subject", which
   names the wrong problem; the qualified forms work (probe p23 versus
   p23b). Keep requiring the qualified form, but when the word before
   `case` is a bare identifier that names a known error member, report an
   `E308` message that names the member and the two accepted forms
   (`Type.MEMBER case`, `error.MEMBER case`).
-- [ ] 10.2.1 Invalid identifier: `_x` (the EBNF requires identifiers to
+- [x] 10.2.1 Invalid identifier: `_x` (the EBNF requires identifiers to
   start with a letter) currently surfaces as `E362` "missing operand for
   value" (probe p29). The tokenizer rejects identifiers that do not
   start with a letter with the reserved `E134` and a message that names
   the rule.
-- [ ] 10.3.1 `void` binding: `5 x mutable void` is accepted silently
+- [x] 10.3.1 `void` binding: `5 x mutable void` is accepted silently
   (probe p46), although `void` marks an empty return and is not a stack
   value. Reject `void` as a declared binding or parameter type with the
   reserved `E400`, added to the explain catalog: use a real type, or
@@ -574,6 +574,38 @@ today.
 Acceptance: the p23 probe names the qualified forms; `_x` fails with
 `E134` at the right span; `5 x mutable void` fails with `E400`; the
 corpus still passes.
+
+Stage 10 findings, recorded when the stage closed:
+
+- The bare-member diagnostic lives in `check_match_case_type`'s
+  unknown-name branch, so it fires only when the word resolves to no type
+  at all: a bare name that is also a visible union type keeps its union
+  member meaning. The message names the declaring error type (the first
+  registered declarer; `Base` in p23, where `Derived` receives the member
+  by injection) and both accepted forms. The qualified forms are
+  unchanged: p23b runs, and an `error.BASE_ONE case` variant runs too.
+- The tokenizer fix is the start-character arm alone: `_` no longer
+  routes to identifier scanning, so a lone `_` is `E134` as well (the
+  EBNF admits no underscore-only identifier). Underscores inside names
+  and number digit separators are unchanged (`1_000` and `my_var`
+  bind), and the error span points at the `_`. `E134` stays out of the
+  explain catalog (tokenizer family).
+- `void` bound silently because its kind code aliases i64 (both are 4).
+  The rejection sits in `binding_type_kind`'s primitive arm, so it covers
+  binding declarations, parameter binding at call entry, and the `void`
+  type-value word alike; that last path previously pushed i64's code, so
+  `x typeof void ==` compared equal to an i64 binding's typeof and now
+  fails with `E400` (a deeper gap closed beneath the task). Return
+  unions are untouched: the return path filters void before kind
+  resolution, and `10_errors` / `15_fs` still pass.
+- The checker reports main-unit bindings and parameters (the parameter
+  diagnostic points at the parameter's own span); the interpreter
+  backstops module units and the REPL, verified with a required module
+  whose function declares a void binding (`E400` at the call site, the
+  same default-span convention as other call-time errors).
+- The corpus list in the module doc of `src/interpreter/mod.rs` was
+  re-checked against `docs/examples/valid/`: all 26 files appear and
+  run cleanly, so no refresh was needed.
 
 ## Verification
 

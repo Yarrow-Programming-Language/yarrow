@@ -175,7 +175,18 @@ impl Tokenizer {
                 }
                 self.add_token(TokenKind::At);
             }
-            c if c.is_ascii_alphabetic() || c == '_' => self.handle_identifier(),
+            c if c.is_ascii_alphabetic() => self.handle_identifier(),
+            // EBNF: identifier = letter, { letter | digit | "_" }; '_' only
+            // appears inside a name (and as a digit separator in numbers),
+            // so it cannot start one.
+            '_' => {
+                return Err(TokenizeError::new(
+                    "identifiers must start with a letter; '_' is only allowed inside a name"
+                        .to_string(),
+                    self.get_location_at(self.start),
+                    "E134".to_string(),
+                ));
+            }
             _ => {
                 return Err(TokenizeError::new(
                     format!("unexpected character '{c}'"),
