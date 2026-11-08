@@ -18,6 +18,7 @@
           clang-tools
           clang-analyzer
 
+          bear
           gnumake
           binutils
           pkg-config
