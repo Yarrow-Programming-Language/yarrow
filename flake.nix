@@ -14,13 +14,12 @@
     {
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
-          rustc
-          cargo
-          clippy
-          rustfmt
-          rust-analyzer
+          clang
+          clang-tools
+          clang-analyzer
 
-          openssl
+          gnumake
+          binutils
           pkg-config
         ];
       };

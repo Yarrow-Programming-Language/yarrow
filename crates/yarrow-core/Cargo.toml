@@ -1,8 +1,0 @@
-[package]
-name = "yarrow_core"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-half = "2.4"
-yarrow_runtime = { path = "../yarrow-runtime" }
