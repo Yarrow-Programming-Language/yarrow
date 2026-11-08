@@ -30,10 +30,6 @@
               - -isystem
               - ${pkgs.glibc.dev}/include
           EOF
-
-          cat > .envrc <<EOF
-          use flake
-          EOF
         '';
       };
     };
