@@ -6,7 +6,7 @@ SRC_DIR = source
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/yarrow
 
-CFLAGS = -Wall -Wextra -I$(SRC_DIR) -I.
+CFLAGS = -I$(SRC_DIR) -I. -pedantic -std=c99 -Wall -Wextra
 LDFLAGS =
 
 SOURCES = $(shell find $(SRC_DIR) -type f -name '*.c')
