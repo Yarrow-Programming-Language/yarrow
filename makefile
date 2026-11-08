@@ -1,6 +1,6 @@
 .PHONY: all build run clean
 
-CC = clang
+CC := $(shell which clang)
 
 SRC_DIR = source
 BUILD_DIR = build

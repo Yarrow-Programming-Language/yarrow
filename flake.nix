@@ -18,11 +18,23 @@
           clang-tools
           clang-analyzer
 
-          bear
           gnumake
           binutils
           pkg-config
         ];
+
+        shellHook = ''
+          cat > .clangd <<EOF
+          CompileFlags:
+            Add:
+              - -isystem
+              - ${pkgs.glibc.dev}/include
+          EOF
+
+          cat > .envrc <<EOF
+          use flake
+          EOF
+        '';
       };
     };
 }
