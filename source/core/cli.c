@@ -8,6 +8,8 @@
 #include "fmt.h"
 #include "lsp.h"
 
+// Bellow are the handling functions for commands
+
 int
 cli_run_command(const CliParseResult *result)
 {
@@ -99,6 +101,8 @@ cli_debug_tokens_command(const CliParseResult *result)
 	return -1;
 }
 
+// Some helper functions
+
 int
 cli_execute_global_flags(Cli *cli, CliParseResult *result)
 {
@@ -121,7 +125,7 @@ cli_has_flag(const CliParseResult *result, const char *name)
 {
 	for (size_t i = 0; i < result->flag_count; i++)
 	{
-		if (strcmp(result->flags[i].flag->name, name) == 0)
+		if (result->flags[i].present && strcmp(result->flags[i].flag->name, name) == 0)
 		{
 			return 1;
 		}
@@ -190,6 +194,71 @@ cli_resolve_flag(Cli *cli, CliCommand **commands, size_t command_count, const ch
 }
 
 int
+cli_parse_free(CliParseResult *result)
+{
+	if (result == NULL)
+	{
+		return 0;
+	}
+
+	free(result->flags);
+	free(result->positionals);
+	free(result->command_path);
+
+	memset(result, 0, sizeof(*result));
+
+	return 0;
+}
+
+void
+cli_help_commands(CliCommand *commands, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		CliCommand *command = &commands[i];
+
+		printf("  ");
+		printf("%-20s", command->name);
+		printf("%s\n", command->description);
+	}
+}
+
+void
+cli_help_flags(CliFlag *flags, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		CliFlag *flag = &flags[i];
+
+		printf("  ");
+
+		if (flag->short_name != NULL)
+		{
+			printf("-%s, ", flag->short_name);
+		}
+		else
+		{
+			printf("    ");
+		}
+
+		printf("--%-14s", flag->name);
+
+		if (flag->takes_value == CLI_FLAG_REQUIRED_VALUE)
+		{
+			printf(" <%s>", flag->value_name != NULL ? flag->value_name : "value");
+		}
+		else if (flag->takes_value == CLI_FLAG_OPTIONAL_VALUE)
+		{
+			printf(" [%s]", flag->value_name != NULL ? flag->value_name : "value");
+		}
+
+		printf("%s\n", flag->description);
+	}
+}
+
+// All the important stuff
+
+int
 cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 {
 	if (cli == NULL || result == NULL || argc < 1 || argv == NULL)
@@ -199,7 +268,7 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 
 	memset(result, 0, sizeof(*result));
 
-	result->flags = calloc((size_t) argc, sizeof(CliParseResult));
+	result->flags = calloc((size_t) argc, sizeof(CliParsedFlag));
 	result->positionals = calloc((size_t) argc, sizeof(char *));
 
 	CliCommand **commands = calloc((size_t) argc, sizeof(CliCommand *));
@@ -254,6 +323,21 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 			else
 			{
 				name = arg + 1;
+
+				if (name[0] != '\0' && name[1] != '\0')
+				{
+					allocated_name = malloc(2);
+					if (allocated_name == NULL)
+					{
+						goto error;
+					}
+
+					allocated_name[0] = name[0];
+					allocated_name[1] = '\0';
+
+					value = name + 1;
+					name = allocated_name;
+				}
 			}
 
 			if (*name == '\0')
@@ -340,69 +424,6 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 	free(commands);
 	cli_parse_free(result);
 	return -1;
-}
-
-int
-cli_parse_free(CliParseResult *result)
-{
-	if (result == NULL)
-	{
-		return 0;
-	}
-
-	free(result->flags);
-	free(result->positionals);
-	free(result->command_path);
-
-	memset(result, 0, sizeof(*result));
-
-	return 0;
-}
-
-void
-cli_help_commands(CliCommand *commands, size_t count)
-{
-	for (size_t i = 0; i < count; i++)
-	{
-		CliCommand *command = &commands[i];
-
-		printf("  ");
-		printf("%-20s", command->name);
-		printf("%s\n", command->description);
-	}
-}
-
-void
-cli_help_flags(CliFlag *flags, size_t count)
-{
-	for (size_t i = 0; i < count; i++)
-	{
-		CliFlag *flag = &flags[i];
-
-		printf("  ");
-
-		if (flag->short_name != NULL)
-		{
-			printf("-%s, ", flag->short_name);
-		}
-		else
-		{
-			printf("    ");
-		}
-
-		printf("--%-14s", flag->name);
-
-		if (flag->takes_value == CLI_FLAG_REQUIRED_VALUE)
-		{
-			printf(" <%s>", flag->value_name != NULL ? flag->value_name : "value");
-		}
-		else if (flag->takes_value == CLI_FLAG_OPTIONAL_VALUE)
-		{
-			printf(" [%s]", flag->value_name != NULL ? flag->value_name : "value");
-		}
-
-		printf("%s\n", flag->description);
-	}
 }
 
 int
