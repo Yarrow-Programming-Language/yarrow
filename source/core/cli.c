@@ -1,3 +1,19 @@
+/*
+ * This file define the Yarrow cli.
+ * It is the main entry point for using the language.
+ * It's nothing complicated.
+ *
+ * The structure of the cli is as follow:
+ * Cli                    The main structure
+ * | -> Commands          The commands defined in the cli (e.g build, run, init...)
+ * | | -> Subcommands     Subcommands of the parent command
+ * | | -> Options         Flags of the parent command
+ * | -> Global Options    The flags that take priority over all other flags
+ *
+ * Execpt for the help global option that work for specific commands to get their
+ * specific help, nothing else should be more complicated than this.
+ */
+
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -111,6 +127,7 @@ cli_execute_global_flags(Cli *cli, CliParseResult *result)
 		return cli_help(cli, result);
 	}
 
+	// Should also print the tokenizer, interpreter, ast and compiler version
 	if (cli_has_flag(result, "version"))
 	{
 		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION);
@@ -125,6 +142,7 @@ cli_has_flag(const CliParseResult *result, const char *name)
 {
 	for (size_t i = 0; i < result->flag_count; i++)
 	{
+		// Not sure about filtering by present
 		if (result->flags[i].present && strcmp(result->flags[i].flag->name, name) == 0)
 		{
 			return 1;
@@ -275,6 +293,7 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 
 	if (result->flags == NULL || result->positionals == NULL || commands == NULL)
 	{
+		// Diabolical use of the horrendous goto
 		goto error;
 	}
 
@@ -453,10 +472,11 @@ cli_help(Cli *cli, CliParseResult *result)
 			printf(" [options]");
 		}
 
-		printf("\n\n");
+		printf("\n");
 
-		if (result->command->description != NULL)
+		if (result->command->description != NULL && strcmp(result->command->description, "") != 0)
 		{
+			printf("\n");
 			printf("%s\n", result->command->description);
 		}
 
