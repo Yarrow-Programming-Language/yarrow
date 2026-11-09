@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 
+#define CLI_VERSION "0.0.1"
+
 typedef struct cli_flag CliFlag;
 typedef struct cli_command CliCommand;
 typedef struct cli_parsed_flag CliParsedFlag;
@@ -75,6 +77,8 @@ int cli_debug_command(const CliParseResult *result);
 int cli_debug_ast_command(const CliParseResult *result);
 int cli_debug_ir_command(const CliParseResult *result);
 int cli_debug_tokens_command(const CliParseResult *result);
+int cli_has_flag(const CliParseResult *result, const char *name);
+const char *cli_get_flag_value(const CliParseResult *result, const char *name);
 static CliCommand *cli_find_command(CliCommand *commands, size_t count, const char *name);
 static CliFlag *cli_find_flag(CliFlag *flags, size_t count, const char *name);
 static CliFlag *cli_resolve_flag(Cli *cli, CliCommand **commands, size_t command_count, const char *name);

@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "cli.h"
+#include "fmt.h"
+#include "lsp.h"
 
 int
 cli_run_command(const CliParseResult *result)
@@ -13,8 +15,36 @@ cli_run_command(const CliParseResult *result)
 }
 
 int
+cli_init_command(const CliParseResult *result)
+{
+	int exe = cli_has_flag(result, "exe");
+	if (exe)
+	{
+		assert(0 && "Not implemented");
+		return -1;
+	}
+
+	int lib = cli_has_flag(result, "lib");
+	if (lib)
+	{
+		assert(0 && "Not implemented");
+		return -1;
+	}
+
+	assert(0 && "Not implemented");
+	return -1;
+}
+
+int
 cli_build_command(const CliParseResult *result)
 {
+	const char *output = cli_get_flag_value(result, "output");
+	if (output != NULL)
+	{
+		assert(0 && "Not implemented");
+		return -1;
+	}
+
 	assert(0 && "Not implemented");
 	return -1;
 }
@@ -66,6 +96,51 @@ cli_debug_tokens_command(const CliParseResult *result)
 {
 	assert(0 && "Not implemented");
 	return -1;
+}
+
+int
+cli_execute_global_flags(Cli *cli, const CliParseResult *result)
+{
+	if (cli_has_flag(result, "help"))
+	{
+		return cli_help(cli, result->command);
+	}
+
+	if (cli_has_flag(result, "version"))
+	{
+		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION);
+		return 0;
+	}
+
+	return -1;
+}
+
+int
+cli_has_flag(const CliParseResult *result, const char *name)
+{
+	for (size_t i = 0; i < result->flag_count; i++)
+	{
+		if (strcmp(result->flags[i].flag->name, name) == 0)
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+const char *
+cli_get_flag_value(const CliParseResult *result, const char *name)
+{
+	for (size_t i = 0; i < result->flag_count; i++)
+	{
+		if (strcmp(result->flags[i].flag->name, name) == 0)
+		{
+			return result->flags[i].value;
+		}
+	}
+
+	return NULL;
 }
 
 static CliCommand *
@@ -201,7 +276,7 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 				{
 					if (i + 1 >= argc)
 					{
-						printf("ERROR: option %s require a value", arg);
+						printf("ERROR: option %s require a value\n", arg);
 						goto error;
 					}
 
@@ -211,8 +286,10 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 
 			if (flag->takes_value == CLI_FLAG_OPTIONAL_VALUE)
 			{
-				assert(0 && "Not implemented");
-				return -1;
+				if (value == NULL)
+				{
+					value = flag->default_value;
+				}
 			}
 
 			result->flags[result->flag_count++] = (CliParsedFlag) {
@@ -302,7 +379,7 @@ cli_help(Cli *cli, CliCommand *command)
 		return -1;
 	}
 
-	printf("Usage: %s [options] file\n", cli->name);
+	printf("Usage: %s [command] [options]\n", cli->name);
 	printf("\n");
 
 	printf("Commands:\n");
@@ -343,6 +420,31 @@ cli_init(Cli *cli)
 		}
 	};
 
+	static CliFlag init_flags[] = {
+		{
+			.name = "exe",
+			.short_name = "e",
+			.description = "Initialize a Yarrow project for an executable",
+			.takes_value = CLI_FLAG_NONE
+		},
+		{
+			.name = "lib",
+			.short_name = "l",
+			.description = "Initialize a Yarrow project for a library",
+			.takes_value = CLI_FLAG_NONE
+		}
+	};
+
+	static CliFlag build_flags[] = {
+		{
+			.name = "output",
+			.short_name = "o",
+			.description = "File path to output executable",
+			.takes_value = CLI_FLAG_REQUIRED_VALUE,
+			.value_name = "file"
+		}
+	};
+
 	static CliCommand commands[] = {
 		{
 			.name = "run",
@@ -350,8 +452,17 @@ cli_init(Cli *cli)
 			.handler = cli_run_command
 		},
 		{
+			.name = "init",
+			.description = "Initialize a Yarrow project",
+			.flags = init_flags,
+			.flag_count = sizeof(init_flags) / sizeof(init_flags[0]),
+			.handler = cli_init_command
+		},
+		{
 			.name = "build",
 			.description = "Build an executable",
+			.flags = build_flags,
+			.flag_count = sizeof(build_flags) / sizeof(build_flags[0]),
 			.handler = cli_build_command
 		},
 		{
@@ -372,9 +483,9 @@ cli_init(Cli *cli)
 		{
 			.name = "debug",
 			.description = "Helper command for Yarrow development",
-			.handler = cli_debug_command,
 			.subcommands = debug_subcommands,
-			.subcommand_count = sizeof(debug_subcommands) / sizeof(debug_subcommands[0])
+			.subcommand_count = sizeof(debug_subcommands) / sizeof(debug_subcommands[0]),
+			.handler = cli_debug_command
 		}
 	};
 
@@ -419,7 +530,12 @@ cli_run(int argc, char **argv)
 	}
 
 	int status = 0;
-	if (result.command != NULL && result.command->handler != NULL)
+	int global_flag_status = cli_execute_global_flags(&cli, &result);
+	if (global_flag_status != -1)
+	{
+		status = global_flag_status;
+	}
+	else if (result.command != NULL && result.command->handler != NULL)
 	{
 		status = result.command->handler(&result);
 	}
