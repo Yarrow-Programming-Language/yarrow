@@ -6,10 +6,6 @@
   <b>A typed, stack-based language with ownership, regions, and explicit unsafe</b>
 </p>
 
-<p align="center">
-  Safe by default · No lifetime annotations · Interpreter-only with LSP
-</p>
-
 ---
 
 This is a side-quest to rewrite this language in C without the use or with a minimal use of LLMs.
