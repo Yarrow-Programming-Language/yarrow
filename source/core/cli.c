@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "cli.h"
 #include "fmt.h"
 #include "lsp.h"
@@ -99,11 +100,11 @@ cli_debug_tokens_command(const CliParseResult *result)
 }
 
 int
-cli_execute_global_flags(Cli *cli, const CliParseResult *result)
+cli_execute_global_flags(Cli *cli, CliParseResult *result)
 {
 	if (cli_has_flag(result, "help"))
 	{
-		return cli_help(cli, result->command);
+		return cli_help(cli, result);
 	}
 
 	if (cli_has_flag(result, "version"))
@@ -330,7 +331,9 @@ cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result)
 		result->command = commands[command_count - 1];
 	}
 
-	free(commands);
+	result->command_path = commands;
+	result->command_depth = command_count;
+
 	return 0;
 
 	error:
@@ -349,52 +352,120 @@ cli_parse_free(CliParseResult *result)
 
 	free(result->flags);
 	free(result->positionals);
+	free(result->command_path);
 
 	memset(result, 0, sizeof(*result));
 
 	return 0;
 }
 
-int
-cli_help(Cli *cli, CliCommand *command)
+void
+cli_help_commands(CliCommand *commands, size_t count)
 {
-	if (command != NULL)
+	for (size_t i = 0; i < count; i++)
 	{
-		assert(0 && "Not implemented: command specific help");
-		return -1;
-	}
+		CliCommand *command = &commands[i];
 
+		printf("  ");
+		printf("%-20s", command->name);
+		printf("%s\n", command->description);
+	}
+}
+
+void
+cli_help_flags(CliFlag *flags, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		CliFlag *flag = &flags[i];
+
+		printf("  ");
+
+		if (flag->short_name != NULL)
+		{
+			printf("-%s, ", flag->short_name);
+		}
+		else
+		{
+			printf("    ");
+		}
+
+		printf("--%-14s", flag->name);
+
+		if (flag->takes_value == CLI_FLAG_REQUIRED_VALUE)
+		{
+			printf(" <%s>", flag->value_name != NULL ? flag->value_name : "value");
+		}
+		else if (flag->takes_value == CLI_FLAG_OPTIONAL_VALUE)
+		{
+			printf(" [%s]", flag->value_name != NULL ? flag->value_name : "value");
+		}
+
+		printf("%s\n", flag->description);
+	}
+}
+
+int
+cli_help(Cli *cli, CliParseResult *result)
+{
 	if (cli == NULL)
 	{
 		return -1;
 	}
 
-	if (cli->command_count > 0 && cli->commands == NULL)
+	if (result->command != NULL)
 	{
-		return -1;
+		printf("Usage: %s", cli->name);
+
+		for (size_t i = 0; i < result->command_depth; i++)
+		{
+			printf(" %s", result->command_path[i]->name);
+		}
+
+		if (result->command->subcommand_count > 0)
+		{
+			printf(" [commands]");
+		}
+
+		if (result->command->flag_count > 0)
+		{
+			printf(" [options]");
+		}
+
+		printf("\n\n");
+
+		if (result->command->description != NULL)
+		{
+			printf("%s\n", result->command->description);
+		}
+
+		printf("\n");
+
+		if (result->command->subcommand_count > 0)
+		{
+			printf("Commands:\n");
+			cli_help_commands(result->command->subcommands, result->command->subcommand_count);
+			printf("\n");
+		}
+
+		if (result->command->flag_count > 0)
+		{
+			printf("Options:\n");
+			cli_help_flags(result->command->flags, result->command->flag_count);
+			printf("\n");
+		}
+	}
+	else
+	{
+		printf("Usage: %s [command] [options]\n", cli->name);
+		printf("\n");
+		printf("Commands:\n");
+		cli_help_commands(cli->commands, cli->command_count);
+		printf("\n");
 	}
 
-	if (cli->global_flag_count > 0 && cli->global_flags == NULL)
-	{
-		return -1;
-	}
-
-	printf("Usage: %s [command] [options]\n", cli->name);
-	printf("\n");
-
-	printf("Commands:\n");
-	for (int i = 0; i < cli->command_count; i++)
-	{
-		printf("\t%-20s %s\n", cli->commands[i].name, cli->commands[i].description);
-	}
-	printf("\n");
-
-	printf("Options:\n");
-	for (int i = 0; i < cli->global_flag_count; i++)
-	{
-		printf("\t--%-10s -%-6s %s\n", cli->global_flags[i].name, cli->global_flags[i].short_name, cli->global_flags[i].description);
-	}
-	printf("\n");
+	printf("Global options:\n");
+	cli_help_flags(cli->global_flags, cli->global_flag_count);
 
 	return 0;
 }
@@ -541,7 +612,7 @@ cli_run(int argc, char **argv)
 	}
 	else
 	{
-		cli_help(&cli, result.command);
+		cli_help(&cli, &result);
 	}
 
 	cli_parse_free(&result);

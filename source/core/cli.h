@@ -1,7 +1,7 @@
+#include <stddef.h>
+
 #ifndef CLI_H
 #define CLI_H
-
-#include <stddef.h>
 
 #define CLI_VERSION "0.0.1"
 
@@ -20,6 +20,9 @@ struct cli_parsed_flag {
 
 struct cli_parse_result {
 	CliCommand *command;
+
+	CliCommand **command_path;
+	size_t command_depth;
 
 	CliParsedFlag *flags;
 	size_t flag_count;
@@ -84,7 +87,9 @@ static CliFlag *cli_find_flag(CliFlag *flags, size_t count, const char *name);
 static CliFlag *cli_resolve_flag(Cli *cli, CliCommand **commands, size_t command_count, const char *name);
 int cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result);
 int cli_parse_free(CliParseResult *result);
-int cli_help(Cli *cli, CliCommand *command);
+void cli_help_commands(CliCommand *commands, size_t count);
+void cli_help_flags(CliFlag *flags, size_t count);
+int cli_help(Cli *cli, CliParseResult *result);
 int cli_init(Cli *cli);
 int cli_run(int argc, char **argv);
 
