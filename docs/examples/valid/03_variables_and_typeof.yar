@@ -1,4 +1,4 @@
-# mutable / const / static bindings, coercion on declare, and typeof.
+# mutable, const and static bindings, coercion on declare, and typeof.
 
 "std.io" io require
 

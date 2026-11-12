@@ -1,1 +1,0 @@
-Most of the documentation here was rewriten by LLMs and is a bit of a mess. However, it still get most of my ideas right. In the end, I want to have a sort of C standard for my language, independent of any compiler that can be replicated and changed.

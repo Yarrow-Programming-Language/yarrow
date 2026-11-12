@@ -1,0 +1,6 @@
+#ifndef INTERPRETER_H
+#define INTERPRETER_H
+
+#define INTERPRETER_VERSION "0.0.1"
+
+#endif

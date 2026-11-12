@@ -27,13 +27,12 @@ main function do
 
 	0 i mutable i32
 	i 3 < for
-		i 1 + i set
+		i inc i set
 	end
 
-	[10 20 30] numbers static array<i32 3>
 	0 sum mutable i32
-	numbers for
-		sum loop.value + sum set
+	[10 20 30] for
+		sum + sum set
 	end
 
 	"control ok" io.write_line call

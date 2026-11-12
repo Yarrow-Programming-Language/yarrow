@@ -12,6 +12,7 @@ demo function do
 
 	3 4 add call
 	drop
+
 	"add ok" io.write_line call
 end
 
