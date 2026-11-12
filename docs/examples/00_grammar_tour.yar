@@ -383,9 +383,11 @@ union_function function do
 	# typeof on a union reports the union type, not the active member.
 	val match
 		i32 case
+			val 4 +
 		end
 
 		string case
+			val io.write_line call
 		end
 
 		else     # Here it's optional and will never match since all the union field are matched above.
