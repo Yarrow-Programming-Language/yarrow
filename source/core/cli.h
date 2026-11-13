@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifndef CLI_H
@@ -15,7 +16,7 @@ typedef int (*CliCommandHandler)(const CliParseResult *result);
 struct cli_parsed_flag {
 	const CliFlag *flag;
 	const char *value;
-	int present;
+	bool present;
 };
 
 struct cli_parse_result {
@@ -70,72 +71,6 @@ typedef struct {
 	CliFlag *global_flags;
 	size_t global_flag_count;
 } Cli;
-
-int
-cli_run_command(const CliParseResult *result);
-
-int
-cli_init_command(const CliParseResult *result);
-
-int
-cli_build_command(const CliParseResult *result);
-
-int
-cli_interpret_command(const CliParseResult *result);
-
-int
-cli_lsp_command(const CliParseResult *result);
-
-int
-cli_fmt_command(const CliParseResult *result);
-
-int
-cli_debug_command(const CliParseResult *result);
-
-int
-cli_debug_ast_command(const CliParseResult *result);
-
-int
-cli_debug_ir_command(const CliParseResult *result);
-
-int
-cli_debug_tokens_command(const CliParseResult *result);
-
-int
-cli_execute_global_flags(Cli *cli, CliParseResult *result);
-
-int
-cli_has_flag(const CliParseResult *result, const char *name);
-
-const char *
-cli_get_flag_value(const CliParseResult *result, const char *name);
-
-static CliCommand *
-cli_find_command(CliCommand *commands, size_t count, const char *name);
-
-static CliFlag *
-cli_find_flag(CliFlag *flags, size_t count, const char *name);
-
-static CliFlag *
-cli_resolve_flag(Cli *cli, CliCommand **commands, size_t command_count, const char *name);
-
-int
-cli_parse(Cli *cli, int argc, char **argv, CliParseResult *result);
-
-int
-cli_parse_free(CliParseResult *result);
-
-void
-cli_help_commands(CliCommand *commands, size_t count);
-
-void
-cli_help_flags(CliFlag *flags, size_t count);
-
-int
-cli_help(Cli *cli, CliParseResult *result);
-
-int
-cli_init(Cli *cli);
 
 int
 cli_run(int argc, char **argv);
