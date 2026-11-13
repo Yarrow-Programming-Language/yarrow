@@ -46,12 +46,10 @@ cli_error(const char *format, ...)
 // Some helper functions
 
 static void
-cli_help_commands(CliCommand *commands, size_t count)
+cli_help_commands(const CliCommand *commands)
 {
-	for (size_t i = 0; i < count; i++)
+	for (const CliCommand *command = commands; command->name != NULL; command++)
 	{
-		CliCommand *command = &commands[i];
-
 		printf("  ");
 		printf("%-20s", command->name);
 		printf("%s\n", command->description);
@@ -59,12 +57,10 @@ cli_help_commands(CliCommand *commands, size_t count)
 }
 
 static void
-cli_help_flags(CliFlag *flags, size_t count)
+cli_help_flags(const CliFlag *flags)
 {
-	for (size_t i = 0; i < count; i++)
+	for (const CliFlag *flag = flags; flag->name != NULL; flag++)
 	{
-		CliFlag *flag = &flags[i];
-
 		printf("  ");
 
 		if (flag->short_name != NULL)
@@ -92,7 +88,7 @@ cli_help_flags(CliFlag *flags, size_t count)
 }
 
 static int
-cli_help(const Cli *cli, const CliParseResult *result)
+cli_help(const Cli *cli, const CliParsedResult *result)
 {
 	if (cli == NULL || result == NULL)
 	{
@@ -103,17 +99,17 @@ cli_help(const Cli *cli, const CliParseResult *result)
 	{
 		printf("Usage: %s", cli->name);
 
-		for (size_t i = 0; i < result->command_depth; i++)
+		for (CliCommand **path = result->command_path; *path != NULL; path++)
 		{
-			printf(" %s", result->command_path[i]->name);
+			printf(" %s", (*path)->name);
 		}
 
-		if (result->command->subcommand_count > 0)
+		if (result->command->subcommands != NULL && result->command->subcommands[0].name != NULL)
 		{
 			printf(" [commands]");
 		}
 
-		if (result->command->flag_count > 0)
+		if (result->command->flags != NULL && result->command->flags[0].name != NULL)
 		{
 			printf(" [options]");
 		}
@@ -128,17 +124,17 @@ cli_help(const Cli *cli, const CliParseResult *result)
 
 		printf("\n");
 
-		if (result->command->subcommand_count > 0)
+		if (result->command->subcommands != NULL && result->command->subcommands[0].name != NULL)
 		{
 			printf("Commands:\n");
-			cli_help_commands(result->command->subcommands, result->command->subcommand_count);
+			cli_help_commands(result->command->subcommands);
 			printf("\n");
 		}
 
-		if (result->command->flag_count > 0)
+		if (result->command->flags != NULL && result->command->flags[0].name != NULL)
 		{
 			printf("Options:\n");
-			cli_help_flags(result->command->flags, result->command->flag_count);
+			cli_help_flags(result->command->flags);
 			printf("\n");
 		}
 	}
@@ -147,22 +143,22 @@ cli_help(const Cli *cli, const CliParseResult *result)
 		printf("Usage: %s [command] [options]\n", cli->name);
 		printf("\n");
 		printf("Commands:\n");
-		cli_help_commands(cli->commands, cli->command_count);
+		cli_help_commands(cli->commands);
 		printf("\n");
 	}
 
 	printf("Global options:\n");
-	cli_help_flags(cli->global_flags, cli->global_flag_count);
+	cli_help_flags(cli->global_flags);
 
 	return EXIT_SUCCESS;
 }
 
 static bool
-cli_has_flag(const CliParseResult *result, const char *name)
+cli_has_flag(const CliParsedResult *result, const char *name)
 {
-	for (size_t i = 0; i < result->flag_count; i++)
+	for (const CliParsedFlag *flag = result->flags; flag->flag != NULL; flag++)
 	{
-		if (result->flags[i].present && strcmp(result->flags[i].flag->name, name) == 0)
+		if (flag->present && strcmp(flag->flag->name, name) == 0)
 		{
 			return true;
 		}
@@ -172,13 +168,13 @@ cli_has_flag(const CliParseResult *result, const char *name)
 }
 
 static const char *
-cli_get_flag_value(const CliParseResult *result, const char *name)
+cli_get_flag_value(const CliParsedResult *result, const char *name)
 {
-	for (size_t i = 0; i < result->flag_count; i++)
+	for (const CliParsedFlag *flag = result->flags; flag->flag != NULL; flag++)
 	{
-		if (result->flags[i].present && strcmp(result->flags[i].flag->name, name) == 0)
+		if (flag->present && strcmp(flag->flag->name, name) == 0)
 		{
-			return result->flags[i].value;
+			return flag->value;
 		}
 	}
 
@@ -186,13 +182,13 @@ cli_get_flag_value(const CliParseResult *result, const char *name)
 }
 
 static bool
-cli_has_global_flags(const CliParseResult *result)
+cli_has_global_flags(const CliParsedResult *result)
 {
 	return cli_has_flag(result, "help") || cli_has_flag(result, "version");
 }
 
 static bool
-cli_execute_global_flags(const Cli *cli, const CliParseResult *result)
+cli_execute_global_flags(const Cli *cli, const CliParsedResult *result)
 {
 	if (cli_has_flag(result, "help"))
 	{
@@ -215,13 +211,13 @@ cli_execute_global_flags(const Cli *cli, const CliParseResult *result)
 }
 
 static CliCommand *
-cli_find_command(CliCommand *commands, size_t count, const char *name)
+cli_find_command(CliCommand *commands, const char *name)
 {
-	for (size_t i = 0; i < count; i++)
+	for (CliCommand *command = commands; command->name != NULL; command++)
 	{
-		if (strcmp(commands[i].name, name) == 0)
+		if (strcmp(command->name, name) == 0)
 		{
-			return &commands[i];
+			return command;
 		}
 	}
 
@@ -229,13 +225,13 @@ cli_find_command(CliCommand *commands, size_t count, const char *name)
 }
 
 static CliFlag *
-cli_find_flag(CliFlag *flags, size_t count, const char *name)
+cli_find_flag(CliFlag *flags, const char *name)
 {
-	for (size_t i = 0; i < count; i++)
+	for (CliFlag *flag = flags; flag->name != NULL; flag++)
 	{
-		if (strcmp(flags[i].name, name) == 0 || (flags[i].short_name != NULL && strcmp(flags[i].short_name, name) == 0))
+		if (strcmp(flag->name, name) == 0 || (flag->short_name != NULL && strcmp(flag->short_name, name) == 0))
 		{
-			return &flags[i];
+			return flag;
 		}
 	}
 
@@ -243,12 +239,18 @@ cli_find_flag(CliFlag *flags, size_t count, const char *name)
 }
 
 static CliFlag *
-cli_resolve_flag(const Cli *cli, CliCommand **commands, size_t command_count, const char *name)
+cli_resolve_flag(const Cli *cli, CliCommand **commands, const char *name)
 {
-	for (size_t i = command_count; i > 0; i--)
+	CliCommand **end = commands;
+
+	while (*end != NULL)
 	{
-		CliCommand *command = commands[i - 1];
-		CliFlag *flag = cli_find_flag(command->flags, command->flag_count, name);
+		end++;
+	}
+
+	for (CliCommand **it = end; it > commands; it--)
+	{
+		CliFlag *flag = cli_find_flag((*(it - 1))->flags, name);
 
 		if (flag != NULL)
 		{
@@ -256,11 +258,11 @@ cli_resolve_flag(const Cli *cli, CliCommand **commands, size_t command_count, co
 		}
 	}
 
-	return cli_find_flag(cli->global_flags, cli->global_flag_count, name);
+	return cli_find_flag(cli->global_flags, name);
 }
 
 static void
-cli_parse_free(CliParseResult *result)
+cli_parse_free(CliParsedResult *result)
 {
 	if (result != NULL)
 	{
@@ -275,14 +277,14 @@ cli_parse_free(CliParseResult *result)
 // Below are the handling functions for commands
 
 int
-cli_run_command(const CliParseResult *result)
+cli_run_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_init_command(const CliParseResult *result)
+cli_init_command(const CliParsedResult *result)
 {
 	int exe = cli_has_flag(result, "exe");
 	if (exe)
@@ -303,7 +305,7 @@ cli_init_command(const CliParseResult *result)
 }
 
 int
-cli_build_command(const CliParseResult *result)
+cli_build_command(const CliParsedResult *result)
 {
 	const char *output = cli_get_flag_value(result, "output");
 	if (output != NULL)
@@ -317,49 +319,49 @@ cli_build_command(const CliParseResult *result)
 }
 
 int
-cli_interpret_command(const CliParseResult *result)
+cli_interpret_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_lsp_command(const CliParseResult *result)
+cli_lsp_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_fmt_command(const CliParseResult *result)
+cli_fmt_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_debug_command(const CliParseResult *result)
+cli_debug_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_debug_ast_command(const CliParseResult *result)
+cli_debug_ast_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_debug_ir_command(const CliParseResult *result)
+cli_debug_ir_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
 }
 
 int
-cli_debug_tokens_command(const CliParseResult *result)
+cli_debug_tokens_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
@@ -368,7 +370,7 @@ cli_debug_tokens_command(const CliParseResult *result)
 // All the important stuff
 
 static int
-cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
+cli_parse(const Cli *cli, int argc, char **argv, CliParsedResult *result)
 {
 	if (cli == NULL || result == NULL || argc < 1 || argv == NULL)
 	{
@@ -377,6 +379,7 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 
 	memset(result, 0, sizeof(*result));
 
+	// The buffers can hold argc - 1 entries plus the NULL terminator
 	result->flags = calloc((size_t) argc, sizeof(CliParsedFlag));
 	result->positionals = calloc((size_t) argc, sizeof(char *));
 
@@ -389,6 +392,8 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 	}
 
 	size_t command_count = 0;
+	size_t flag_count = 0;
+	size_t positional_count = 0;
 	int options_enabled = 1;
 
 	for (int i = 1; i < argc; i++)
@@ -457,7 +462,7 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 				goto error;
 			}
 
-			CliFlag *flag = cli_resolve_flag(cli, commands, command_count, name);
+			CliFlag *flag = cli_resolve_flag(cli, commands, name);
 			free(allocated_name);
 
 			if (flag == NULL)
@@ -494,7 +499,7 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 				}
 			}
 
-			result->flags[result->flag_count++] = (CliParsedFlag) {
+			result->flags[flag_count++] = (CliParsedFlag) {
 				.flag = flag,
 				.value = value,
 				.present = true
@@ -505,7 +510,7 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 
 		if (command_count == 0)
 		{
-			CliCommand *command = cli_find_command(cli->commands, cli->command_count, arg);
+			CliCommand *command = cli_find_command(cli->commands, arg);
 			if (command == NULL)
 			{
 				cli_error("unknown command %s", arg);
@@ -517,14 +522,14 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 		}
 
 		CliCommand *current = commands[command_count - 1];
-		CliCommand *subcommand = cli_find_command(current->subcommands, current->subcommand_count, arg);
+		CliCommand *subcommand = cli_find_command(current->subcommands, arg);
 		if (subcommand != NULL)
 		{
 			commands[command_count++] = subcommand;
 			continue;
 		}
 
-		result->positionals[result->positional_count++] = arg;
+		result->positionals[positional_count++] = arg;
 	}
 
 	if (command_count > 0)
@@ -533,7 +538,6 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 	}
 
 	result->command_path = commands;
-	result->command_depth = command_count;
 
 	return EXIT_SUCCESS;
 
@@ -543,126 +547,111 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParseResult *result)
 	return EXIT_FAILURE;
 }
 
-static void
-cli_init(Cli *cli)
-{
-	static CliCommand debug_subcommands[] = {
-		{
-			.name = "ast",
-			.description = "Print the current program AST",
-			.handler = cli_debug_ast_command
-		},
-		{
-			.name = "ir",
-			.description = "Print the current program IR",
-			.handler = cli_debug_ir_command
-		},
-		{
-			.name = "tokens",
-			.description = "Print the current program tokens",
-			.handler = cli_debug_tokens_command
-		}
-	};
-
-	static CliFlag init_flags[] = {
-		{
-			.name = "exe",
-			.short_name = "e",
-			.description = "Initialize a Yarrow project for an executable",
-			.takes_value = CLI_FLAG_NONE
-		},
-		{
-			.name = "lib",
-			.short_name = "l",
-			.description = "Initialize a Yarrow project for a library",
-			.takes_value = CLI_FLAG_NONE
-		}
-	};
-
-	static CliFlag build_flags[] = {
-		{
-			.name = "output",
-			.short_name = "o",
-			.description = "File path to output executable",
-			.takes_value = CLI_FLAG_REQUIRED_VALUE,
-			.value_name = "file"
-		}
-	};
-
-	static CliCommand commands[] = {
-		{
-			.name = "run",
-			.description = "Build and run an executable",
-			.handler = cli_run_command
-		},
-		{
-			.name = "init",
-			.description = "Initialize a Yarrow project",
-			.flags = init_flags,
-			.flag_count = sizeof(init_flags) / sizeof(init_flags[0]),
-			.handler = cli_init_command
-		},
-		{
-			.name = "build",
-			.description = "Build an executable",
-			.flags = build_flags,
-			.flag_count = sizeof(build_flags) / sizeof(build_flags[0]),
-			.handler = cli_build_command
-		},
-		{
-			.name = "interpret",
-			.description = "Interpret without building an executable",
-			.handler = cli_interpret_command
-		},
-		{
-			.name = "lsp",
-			.description = "Run the language server protocol for Yarrow",
-			.handler = cli_lsp_command
-		},
-		{
-			.name = "fmt",
-			.description = "Run the formatter of Yarrow source code",
-			.handler = cli_fmt_command
-		},
-		{
-			.name = "debug",
-			.description = "Helper command for Yarrow development",
-			.subcommands = debug_subcommands,
-			.subcommand_count = sizeof(debug_subcommands) / sizeof(debug_subcommands[0]),
-			.handler = cli_debug_command
-		}
-	};
-
-	static CliFlag global_flags[] = {
-		{
-			.name = "version",
-			.short_name = "v",
-			.description = "Give the current version of Yarrow",
-			.takes_value = CLI_FLAG_NONE,
-		},
-		{
-			.name = "help",
-			.short_name = "h",
-			.description = "Print this or a command specific help",
-			.takes_value = CLI_FLAG_NONE,
-		}
-	};
-
-	cli->name = "yarrow";
-	cli->description = "";
-	cli->commands = commands;
-	cli->command_count = sizeof(commands) / sizeof(commands[0]);
-	cli->global_flags = global_flags;
-	cli->global_flag_count = sizeof(global_flags) / sizeof(global_flags[0]);
-}
-
 int
 cli_run(int argc, char **argv)
 {
-	Cli cli;
-	cli_init(&cli);
+	const Cli cli = {
+		.name = "yarrow",
+		.description = "",
+		.commands = (CliCommand[]) {
+			{
+				.name = "run",
+				.description = "Build and run an executable",
+				.handler = cli_run_command
+			},
+			{
+				.name = "init",
+				.description = "Initialize a Yarrow project",
+				.flags = (CliFlag[]) {
+					{
+						.name = "exe",
+						.short_name = "e",
+						.description = "Initialize a Yarrow project for an executable",
+						.takes_value = CLI_FLAG_NONE
+					},
+					{
+						.name = "lib",
+						.short_name = "l",
+						.description = "Initialize a Yarrow project for a library",
+						.takes_value = CLI_FLAG_NONE
+					},
+					{ 0 }
+				},
+				.handler = cli_init_command
+			},
+			{
+				.name = "build",
+				.description = "Build an executable",
+				.flags = (CliFlag[]) {
+					{
+						.name = "output",
+						.short_name = "o",
+						.description = "File path to output executable",
+						.takes_value = CLI_FLAG_REQUIRED_VALUE,
+						.value_name = "file"
+					},
+					{ 0 }
+				},
+				.handler = cli_build_command
+			},
+			{
+				.name = "interpret",
+				.description = "Interpret without building an executable",
+				.handler = cli_interpret_command
+			},
+			{
+				.name = "lsp",
+				.description = "Run the language server protocol for Yarrow",
+				.handler = cli_lsp_command
+			},
+			{
+				.name = "fmt",
+				.description = "Run the formatter of Yarrow source code",
+				.handler = cli_fmt_command
+			},
+			{
+				.name = "debug",
+				.description = "Helper command for Yarrow development",
+				.subcommands = (CliCommand[]) {
+					{
+						.name = "ast",
+						.description = "Print the current program AST",
+						.handler = cli_debug_ast_command
+					},
+					{
+						.name = "ir",
+						.description = "Print the current program IR",
+						.handler = cli_debug_ir_command
+					},
+					{
+						.name = "tokens",
+						.description = "Print the current program tokens",
+						.handler = cli_debug_tokens_command
+					},
+					{ 0 }
+				},
+				.handler = cli_debug_command
+			},
+			{ 0 }
+		},
+		.global_flags = (CliFlag[]) {
+			{
+				.name = "version",
+				.short_name = "v",
+				.description = "Give the current version of Yarrow",
+				.takes_value = CLI_FLAG_NONE,
+			},
+			{
+				.name = "help",
+				.short_name = "h",
+				.description = "Print this or a command specific help",
+				.takes_value = CLI_FLAG_NONE,
+			},
+			{ 0 }
+		}
+	};
 
-	CliParseResult result;
+	CliParsedResult result;
 	if (cli_parse(&cli, argc, argv, &result) != 0)
 	{
 		return EXIT_FAILURE;
