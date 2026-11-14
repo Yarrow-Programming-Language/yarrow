@@ -410,23 +410,23 @@ cli_debug_tokens_command(const CliParsedResult *result)
 	fclose(file);
 	content[read] = '\0';
 
-	Token tokens[4096];
+	Token *tokens = NULL;
 	size_t token_count = 0;
 
-	if (tokenizer_tokenize(content, tokens, 4096, &token_count) != EXIT_SUCCESS)
+	if (tokenizer_tokenize(content, &tokens, &token_count) != EXIT_SUCCESS || tokens == NULL)
 	{
 		free(content);
-		cli_error("token buffer to small");
+		cli_error("failed to allocate memory for the token list");
 		return EXIT_FAILURE;
 	}
 
 	for (size_t i = 0; i < token_count; i++)
 	{
 		Token *token = &tokens[i];
-
 		printf("main.yar:%d:%d kind=%d lexem='%.*s'\n", token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
 	}
 
+	free(tokens);
 	free(content);
 	return EXIT_SUCCESS;
 

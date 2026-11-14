@@ -26,6 +26,21 @@ tokenizer_error(const char *format, ...)
 
 // Some helper functions
 
+static int
+tokenizer_grow(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t count)
+{
+	size_t new_capacity = *capacity == 0 ? 64 : *capacity * 2;
+	Token *grow = realloc(*tokens, new_capacity * sizeof(Token));
+	if (grow == NULL)
+	{
+		return EXIT_FAILURE;
+	}
+
+	*tokens = grow;
+	*capacity = new_capacity;
+	return EXIT_SUCCESS;
+}
+
 static char
 tokenizer_peek(const Tokenizer *tokenizer)
 {
@@ -74,14 +89,14 @@ tokenizer_match(Tokenizer *tokenizer, char character)
 }
 
 static int
-tokenizer_add_token(Tokenizer *tokenizer, Token *tokens, size_t capacity, size_t *count, TokenKind kind)
+tokenizer_add_token(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count, TokenKind kind)
 {
-	if (*count >= capacity)
+	if (*count >= *capacity && tokenizer_grow(tokenizer, tokens, capacity, *count) != EXIT_SUCCESS)
 	{
 		return EXIT_FAILURE;
 	}
 
-	tokens[*count] = (Token) {
+	(*tokens)[*count] = (Token) {
 		.lexeme = tokenizer->start,
 		.length = (size_t) (tokenizer->current - tokenizer->start),
 		.kind = kind,
@@ -92,7 +107,6 @@ tokenizer_add_token(Tokenizer *tokenizer, Token *tokens, size_t capacity, size_t
 	};
 
 	(*count)++;
-
 	return EXIT_SUCCESS;
 }
 
@@ -111,7 +125,7 @@ tokenizer_is_digit(char character)
 // All the important stuff
 
 int
-tokenizer_tokenize(const char *source, Token *tokens, size_t capacity, size_t *count)
+tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 {
 	Tokenizer tokenizer = {
 		.start = source,
@@ -120,7 +134,10 @@ tokenizer_tokenize(const char *source, Token *tokens, size_t capacity, size_t *c
 		.column = 1
 	};
 
+	*tokens = NULL;
 	*count = 0;
+
+	size_t capacity = 0;
 
 	while (tokenizer_peek(&tokenizer) != '\0')
 	{
@@ -132,33 +149,250 @@ tokenizer_tokenize(const char *source, Token *tokens, size_t capacity, size_t *c
 
 		if (tokenizer_is_identifier_start(character))
 		{
+			// Check for any identifier not defined as a keyword
 			assert(0 && "Not implemented");
 			continue;
 		}
 
 		if (tokenizer_is_digit(character))
 		{
+			// Check for `+`, '-', integers, float
 			assert(0 && "Not implemented");
 			continue;
 		}
 
 		switch (character)
 		{
+			case ' ':
+			case '\t':
+			case '\r':
+				break;
+
+			case '\n':
+				break;
+
+			case '#':
+				break;
+
 			case '(':
-				tokenizer_add_token(&tokenizer, tokens, capacity, count, TOKEN_LEFT_PAREN);
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LEFT_PAREN) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
 				break;
 
 			case ')':
-				tokenizer_add_token(&tokenizer, tokens, capacity, count, TOKEN_RIGHT_PAREN);
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_RIGHT_PAREN) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '{':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LEFT_CURLY) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '}':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_RIGHT_CURLY) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '[':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LEFT_SQUARE) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case ']':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_RIGHT_SQUARE) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '%':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_PERCENT) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '*':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_ASTERISK) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '^':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_CARET) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '~':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_TILDE) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '|':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_PIPE) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '.':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_DOT) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '+':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_PLUS) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '-':
+				if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_MINUS) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
+				break;
+
+			case '/':
+				if (tokenizer_match(&tokenizer, '/'))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_SLASH_SLASH) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_SLASH) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				break;
+
+			case '=':
+				if (tokenizer_match(&tokenizer, '='))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_EQUAL_EQUAL) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_EQUAL) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				break;
+
+			case '!':
+				if (tokenizer_match(&tokenizer, '='))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_NOT_EQUAL) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_BANG) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				break;
+
+			case '<':
+				if (tokenizer_match(&tokenizer, '='))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LESS_EQUAL) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else if (tokenizer_match(&tokenizer, '<'))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LEFT_SHIFT) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LESS) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				break;
+
+			case '>':
+				if (tokenizer_match(&tokenizer, '='))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_GREATER_EQUAL) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else if (tokenizer_match(&tokenizer, '>'))
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_RIGHT_SHIFT) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				else
+				{
+					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_GREATER) != EXIT_SUCCESS)
+					{
+						goto error;
+					}
+				}
+				break;
+
+			case '"':
+				break;
+
+			case '\'':
 				break;
 
 			default:
 				tokenizer_error("unknown lexem `%c`", character);
-				return EXIT_FAILURE;
+				break;
 		}
 	}
 
-	tokenizer_add_token(&tokenizer, tokens, capacity, count, TOKEN_EOF);
+	if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_EOF) != EXIT_SUCCESS)
+	{
+		goto error;
+	}
 
 	return EXIT_SUCCESS;
+
+	error:
+	free(tokens);
+	*tokens = NULL;
+	*count = 0;
+	return EXIT_FAILURE;
 }

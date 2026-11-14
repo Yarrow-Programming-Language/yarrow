@@ -11,7 +11,6 @@ typedef enum {
 	TOKEN_RIGHT_CURLY,         // }
 	TOKEN_LEFT_SQUARE,         // [
 	TOKEN_RIGHT_SQUARE,        // ]
-
 	TOKEN_PLUS,                // +
 	TOKEN_MINUS,               // -
 	TOKEN_ASTERISK,            // *
@@ -23,34 +22,28 @@ typedef enum {
 	TOKEN_PIPE,                // |
 	TOKEN_DOT,                 // .
 	TOKEN_UNDERSCORE,          // _
-	TOKEN_COMMENT,             // #
-	TOKEN_DOC_COMMENT,         // ##
+	TOKEN_BANG,                // !
+	TOKEN_EQUAL,               // =
 	// TOKEN_QUESTION,            // ?
-	// TOKEN_BANG,                // !
 	// TOKEN_COLON,               // :
 	// TOKEN_LEFT_ARROW,          // <-
 	// TOKEN_RIGHT_ARROW,         // ->
-	// TOKEN_EQUAL,               // =
 	// TOKEN_AMPERSAND,           // &
-	// TOKEN_DOLLAR,               // $
-
+	// TOKEN_DOLLAR,              // $
 	TOKEN_EQUAL_EQUAL,         // ==
 	TOKEN_NOT_EQUAL,           // !=
 	TOKEN_GREATER,             // >
 	TOKEN_GREATER_EQUAL,       // >=
 	TOKEN_LESS,                // <
 	TOKEN_LESS_EQUAL,          // <=
-
 	TOKEN_AND,                 // and
 	TOKEN_OR,                  // or
 	TOKEN_NOT,                 // not
 	TOKEN_XOR,                 // xor
 	TOKEN_LEFT_SHIFT,          // <<  left_shift
 	TOKEN_RIGHT_SHIFT,         // >>  right_shift
-
 	TOKEN_AT,                  // For builtin (e.g @write, @)
 	TOKEN_IDENTIFIER,          // For any word not in there
-
 	TOKEN_TYPE,                // For type themselfs (e.g i32, f16, string, rune, even i3 or u5)
 	TOKEN_STRING,              // "my string"
 	TOKEN_RAW_STRING,          // `my raw string`
@@ -61,7 +54,6 @@ typedef enum {
 	TOKEN_HEX_INTEGER,         // 0xff
 	TOKEN_FLOAT,               // 42.67 1_200.006
 	TOKEN_SCIENTIFIC_FLOAT,    // 1.5e10
-
 	// Case insensitive word matching
 	TOKEN_TRUE,
 	TOKEN_FALSE,
@@ -137,6 +129,6 @@ typedef struct {
 	int start_column;
 } Tokenizer;
 
-int tokenizer_tokenize(const char *source, Token *tokens, size_t capacity, size_t *count);
+int tokenizer_tokenize(const char *source, Token **tokens, size_t *count);
 
 #endif
