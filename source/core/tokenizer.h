@@ -1,6 +1,7 @@
 #ifndef TOKENIZER_H
 #define TOKENIZER_H
 
+#include <stddef.h>
 #define TOKENIZER_VERSION "0.0.1"
 
 typedef enum {
@@ -21,17 +22,17 @@ typedef enum {
 	TOKEN_CARET,               // ^
 	TOKEN_PIPE,                // |
 	TOKEN_DOT,                 // .
-	TOKEN_QUESTION,            // ?
-	TOKEN_BANG,                // !
-	TOKEN_COLON,               // :
-	TOKEN_LEFT_ARROW,          // <-
-	TOKEN_RIGHT_ARROW,         // ->
-	TOKEN_EQUAL,               // =
-	TOKEN_AMPERSAND,           // &
 	TOKEN_UNDERSCORE,          // _
-	TOKEN_DOLLAR,               // $
 	TOKEN_COMMENT,             // #
 	TOKEN_DOC_COMMENT,         // ##
+	// TOKEN_QUESTION,            // ?
+	// TOKEN_BANG,                // !
+	// TOKEN_COLON,               // :
+	// TOKEN_LEFT_ARROW,          // <-
+	// TOKEN_RIGHT_ARROW,         // ->
+	// TOKEN_EQUAL,               // =
+	// TOKEN_AMPERSAND,           // &
+	// TOKEN_DOLLAR,               // $
 
 	TOKEN_EQUAL_EQUAL,         // ==
 	TOKEN_NOT_EQUAL,           // !=
@@ -69,7 +70,6 @@ typedef enum {
 	TOKEN_FOR,
 	TOKEN_CONTINUE,
 	TOKEN_BREAK,
-	TOKEN_YIELD,
 	TOKEN_MATCH,
 	TOKEN_CASE,
 	TOKEN_AS,
@@ -91,7 +91,6 @@ typedef enum {
 	TOKEN_UNSAFE,
 	TOKEN_PUBLIC,
 	TOKEN_PRIVATE,
-	TOKEN_COPY,
 	TOKEN_ERROR,
 	TOKEN_STRUCT,
 	TOKEN_IMPLEMENT,
@@ -120,14 +119,24 @@ typedef enum {
 typedef struct {
 	int line;
 	int column;
-	int offset;
 } TokenLocation;
 
 typedef struct {
 	const char *lexeme;
+	size_t length;
 	TokenKind kind;
 	TokenLocation location;
-	int end_offset;
 } Token;
+
+typedef struct {
+	const char *start;
+	const char *current;
+	int line;
+	int column;
+	int start_line;
+	int start_column;
+} Tokenizer;
+
+int tokenizer_tokenize(const char *source, Token *tokens, size_t capacity, size_t *count);
 
 #endif

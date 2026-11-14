@@ -25,6 +25,7 @@
 #include "cli.h"
 #include "fmt.h"
 #include "lsp.h"
+#include "tokenizer.h"
 
 // Error function with arguments check safe-guard
 
@@ -72,18 +73,19 @@ cli_help_flags(const CliFlag *flags)
 			printf("    ");
 		}
 
-		printf("--%-14s", flag->name);
-
+		// Give a limit of 64 character long flag name before segfault
+		char value[64] = "";
 		if (flag->takes_value == CLI_FLAG_REQUIRED_VALUE)
 		{
-			printf(" <%s>", flag->value_name != NULL ? flag->value_name : "value");
+			snprintf(value, sizeof(value), " [%s: required]", flag->value_name != NULL ? flag->value_name : "value");
 		}
 		else if (flag->takes_value == CLI_FLAG_OPTIONAL_VALUE)
 		{
-			printf(" [%s]", flag->value_name != NULL ? flag->value_name : "value");
+			snprintf(value, sizeof(value), " [%s: optional]", flag->value_name != NULL ? flag->value_name : "value");
 		}
 
-		printf("%s\n", flag->description);
+		printf("--%-14s", flag->name);
+		printf("%s%s\n", flag->description, value);
 	}
 }
 
@@ -203,7 +205,7 @@ cli_execute_global_flags(const Cli *cli, const CliParsedResult *result)
 	// Should also print the tokenizer, interpreter, ast and compiler version
 	if (cli_has_flag(result, "version"))
 	{
-		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION);
+		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\nTokenizer version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION, TOKENIZER_VERSION);
 		return true;
 	}
 
@@ -213,6 +215,11 @@ cli_execute_global_flags(const Cli *cli, const CliParsedResult *result)
 static CliCommand *
 cli_find_command(CliCommand *commands, const char *name)
 {
+	if (commands == NULL)
+	{
+		return NULL;
+	}
+
 	for (CliCommand *command = commands; command->name != NULL; command++)
 	{
 		if (strcmp(command->name, name) == 0)
@@ -227,6 +234,11 @@ cli_find_command(CliCommand *commands, const char *name)
 static CliFlag *
 cli_find_flag(CliFlag *flags, const char *name)
 {
+	if (flags == NULL)
+	{
+		return NULL;
+	}
+
 	for (CliFlag *flag = flags; flag->name != NULL; flag++)
 	{
 		if (strcmp(flag->name, name) == 0 || (flag->short_name != NULL && strcmp(flag->short_name, name) == 0))
@@ -363,7 +375,64 @@ cli_debug_ir_command(const CliParsedResult *result)
 int
 cli_debug_tokens_command(const CliParsedResult *result)
 {
-	assert(0 && "Not implemented");
+	const char *input = cli_get_flag_value(result, "input");
+	if (input != NULL)
+	{
+		assert(0 && "Not implemented");
+		return EXIT_FAILURE;
+	}
+
+	FILE *file = fopen("main.yar", "r");
+	if (file == NULL)
+	{
+		cli_error("no main file can be found in the current directory");
+		return EXIT_FAILURE;
+	}
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		goto error;
+	}
+
+	long size = ftell(file);
+	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		goto error;
+	}
+
+	char *content = malloc((size_t) size + 1);
+	if (content == NULL)
+	{
+		goto error;
+	}
+
+	size_t read = fread(content, 1, (size_t) size, file);
+	fclose(file);
+	content[read] = '\0';
+
+	Token tokens[4096];
+	size_t token_count = 0;
+
+	if (tokenizer_tokenize(content, tokens, 4096, &token_count) != EXIT_SUCCESS)
+	{
+		free(content);
+		cli_error("token buffer to small");
+		return EXIT_FAILURE;
+	}
+
+	for (size_t i = 0; i < token_count; i++)
+	{
+		Token *token = &tokens[i];
+
+		printf("main.yar:%d:%d kind=%d lexem='%.*s'\n", token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
+	}
+
+	free(content);
+	return EXIT_SUCCESS;
+
+	error:
+	fclose(file);
+	cli_error("failed to read the main file");
 	return EXIT_FAILURE;
 }
 
@@ -556,23 +625,23 @@ cli_run(int argc, char **argv)
 		.commands = (CliCommand[]) {
 			{
 				.name = "run",
-				.description = "Build and run an executable",
+				.description = "Build and run an executable.",
 				.handler = cli_run_command
 			},
 			{
 				.name = "init",
-				.description = "Initialize a Yarrow project",
+				.description = "Initialize a Yarrow project.",
 				.flags = (CliFlag[]) {
 					{
 						.name = "exe",
 						.short_name = "e",
-						.description = "Initialize a Yarrow project for an executable",
+						.description = "Initialize a Yarrow project for an executable.",
 						.takes_value = CLI_FLAG_NONE
 					},
 					{
 						.name = "lib",
 						.short_name = "l",
-						.description = "Initialize a Yarrow project for a library",
+						.description = "Initialize a Yarrow project for a library.",
 						.takes_value = CLI_FLAG_NONE
 					},
 					{ 0 }
@@ -581,12 +650,12 @@ cli_run(int argc, char **argv)
 			},
 			{
 				.name = "build",
-				.description = "Build an executable",
+				.description = "Build an executable.",
 				.flags = (CliFlag[]) {
 					{
 						.name = "output",
 						.short_name = "o",
-						.description = "File path to output executable",
+						.description = "File path to output executable.",
 						.takes_value = CLI_FLAG_REQUIRED_VALUE,
 						.value_name = "file"
 					},
@@ -596,36 +665,46 @@ cli_run(int argc, char **argv)
 			},
 			{
 				.name = "interpret",
-				.description = "Interpret without building an executable",
+				.description = "Interpret without building an executable.",
 				.handler = cli_interpret_command
 			},
 			{
 				.name = "lsp",
-				.description = "Run the language server protocol for Yarrow",
+				.description = "Run the language server protocol for Yarrow.",
 				.handler = cli_lsp_command
 			},
 			{
 				.name = "fmt",
-				.description = "Run the formatter of Yarrow source code",
+				.description = "Run the formatter of Yarrow source code.",
 				.handler = cli_fmt_command
 			},
 			{
 				.name = "debug",
-				.description = "Helper command for Yarrow development",
+				.description = "Helper command for Yarrow development.",
 				.subcommands = (CliCommand[]) {
 					{
 						.name = "ast",
-						.description = "Print the current program AST",
+						.description = "Print the current program AST.",
 						.handler = cli_debug_ast_command
 					},
 					{
 						.name = "ir",
-						.description = "Print the current program IR",
+						.description = "Print the current program IR.",
 						.handler = cli_debug_ir_command
 					},
 					{
 						.name = "tokens",
-						.description = "Print the current program tokens",
+						.description = "Print the current program tokens.",
+						.flags = (CliFlag[]) {
+							{
+								.name = "input",
+								.short_name = "i",
+								.description = "File path to input source file.",
+								.takes_value = CLI_FLAG_REQUIRED_VALUE,
+								.value_name = "file"
+							},
+							{ 0 }
+						},
 						.handler = cli_debug_tokens_command
 					},
 					{ 0 }
