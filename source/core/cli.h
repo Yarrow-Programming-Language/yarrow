@@ -1,8 +1,8 @@
-#include <stdbool.h>
-#include <stddef.h>
-
 #ifndef CLI_H
 #define CLI_H
+
+#include <stdbool.h>
+#include <stddef.h>
 
 #define CLI_VERSION "0.0.1"
 

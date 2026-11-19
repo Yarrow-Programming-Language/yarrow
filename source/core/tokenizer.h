@@ -2,6 +2,7 @@
 #define TOKENIZER_H
 
 #include <stddef.h>
+
 #define TOKENIZER_VERSION "0.0.1"
 
 typedef enum {

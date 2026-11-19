@@ -1,19 +1,3 @@
-/*
- * This file define the Yarrow cli.
- * It is the main entry point for using the language.
- * It's nothing complicated.
- *
- * The structure of the cli is as follow:
- * Cli                    The main structure
- * | -> Commands          The commands defined in the cli (e.g build, run, init...)
- * | | -> Subcommands     Subcommands of the parent command
- * | | -> Options         Flags of the parent command
- * | -> Global Options    The flags that take priority over all other flags
- *
- * Except for the help global option that work for specific commands to get their
- * specific help, nothing else should be more complicated than this.
- */
-
 #include <stdio.h>
 #include <assert.h>
 #include <stdarg.h>
@@ -27,11 +11,6 @@
 #include "lsp.h"
 #include "tokenizer.h"
 
-// Error function with arguments check safe-guard
-
-#if defined(__GNUC__)
-__attribute__((format(printf, 1, 2)))
-#endif
 static void
 cli_error(const char *format, ...)
 {
@@ -43,8 +22,6 @@ cli_error(const char *format, ...)
 	fprintf(stderr, "\n");
 	va_end(args);
 }
-
-// Some helper functions
 
 static void
 cli_help_commands(const CliCommand *commands)
@@ -286,158 +263,6 @@ cli_parse_free(CliParsedResult *result)
 	}
 }
 
-// Below are the handling functions for commands
-
-int
-cli_run_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_init_command(const CliParsedResult *result)
-{
-	int exe = cli_has_flag(result, "exe");
-	if (exe)
-	{
-		assert(0 && "Not implemented");
-		return EXIT_FAILURE;
-	}
-
-	int lib = cli_has_flag(result, "lib");
-	if (lib)
-	{
-		assert(0 && "Not implemented");
-		return EXIT_FAILURE;
-	}
-
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_build_command(const CliParsedResult *result)
-{
-	const char *output = cli_get_flag_value(result, "output");
-	if (output != NULL)
-	{
-		assert(0 && "Not implemented");
-		return EXIT_FAILURE;
-	}
-
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_interpret_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_lsp_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_fmt_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_debug_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_debug_ast_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_debug_ir_command(const CliParsedResult *result)
-{
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
-}
-
-int
-cli_debug_tokens_command(const CliParsedResult *result)
-{
-	const char *input = cli_get_flag_value(result, "input");
-	if (input != NULL)
-	{
-		assert(0 && "Not implemented");
-		return EXIT_FAILURE;
-	}
-
-	FILE *file = fopen("main.yar", "r");
-	if (file == NULL)
-	{
-		cli_error("no main file can be found in the current directory");
-		return EXIT_FAILURE;
-	}
-
-	if (fseek(file, 0, SEEK_END) != 0)
-	{
-		goto error;
-	}
-
-	long size = ftell(file);
-	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
-	{
-		goto error;
-	}
-
-	char *content = malloc((size_t) size + 1);
-	if (content == NULL)
-	{
-		goto error;
-	}
-
-	size_t read = fread(content, 1, (size_t) size, file);
-	fclose(file);
-	content[read] = '\0';
-
-	Token *tokens = NULL;
-	size_t token_count = 0;
-
-	if (tokenizer_tokenize(content, &tokens, &token_count) != EXIT_SUCCESS || tokens == NULL)
-	{
-		free(content);
-		cli_error("failed to allocate memory for the token list");
-		return EXIT_FAILURE;
-	}
-
-	for (size_t i = 0; i < token_count; i++)
-	{
-		Token *token = &tokens[i];
-		printf("main.yar:%d:%d kind=%d lexem='%.*s'\n", token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
-	}
-
-	free(tokens);
-	free(content);
-	return EXIT_SUCCESS;
-
-	error:
-	fclose(file);
-	cli_error("failed to read the main file");
-	return EXIT_FAILURE;
-}
-
-// All the important stuff
-
 static int
 cli_parse(const Cli *cli, int argc, char **argv, CliParsedResult *result)
 {
@@ -615,6 +440,156 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParsedResult *result)
 	cli_parse_free(result);
 	return EXIT_FAILURE;
 }
+
+
+int
+cli_run_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_init_command(const CliParsedResult *result)
+{
+	int exe = cli_has_flag(result, "exe");
+	if (exe)
+	{
+		assert(0 && "Not implemented");
+		return EXIT_FAILURE;
+	}
+
+	int lib = cli_has_flag(result, "lib");
+	if (lib)
+	{
+		assert(0 && "Not implemented");
+		return EXIT_FAILURE;
+	}
+
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_build_command(const CliParsedResult *result)
+{
+	const char *output = cli_get_flag_value(result, "output");
+	if (output != NULL)
+	{
+		assert(0 && "Not implemented");
+		return EXIT_FAILURE;
+	}
+
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_interpret_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_lsp_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_fmt_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_debug_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_debug_ast_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_debug_ir_command(const CliParsedResult *result)
+{
+	assert(0 && "Not implemented");
+	return EXIT_FAILURE;
+}
+
+int
+cli_debug_tokens_command(const CliParsedResult *result)
+{
+	const char *input = cli_get_flag_value(result, "input");
+	if (input != NULL)
+	{
+		assert(0 && "Not implemented");
+		return EXIT_FAILURE;
+	}
+
+	FILE *file = fopen("main.yar", "r");
+	if (file == NULL)
+	{
+		cli_error("no main file can be found in the current directory");
+		return EXIT_FAILURE;
+	}
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		goto error;
+	}
+
+	long size = ftell(file);
+	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		goto error;
+	}
+
+	char *content = malloc((size_t) size + 1);
+	if (content == NULL)
+	{
+		goto error;
+	}
+
+	size_t read = fread(content, 1, (size_t) size, file);
+	fclose(file);
+	content[read] = '\0';
+
+	Token *tokens = NULL;
+	size_t token_count = 0;
+
+	if (tokenizer_tokenize(content, &tokens, &token_count) != EXIT_SUCCESS || tokens == NULL)
+	{
+		free(content);
+		cli_error("failed to allocate memory for the token list");
+		return EXIT_FAILURE;
+	}
+
+	for (size_t i = 0; i < token_count; i++)
+	{
+		Token *token = &tokens[i];
+		printf("main.yar:%d:%d kind=%d lexem='%.*s'\n", token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
+	}
+
+	free(tokens);
+	free(content);
+	return EXIT_SUCCESS;
+
+	error:
+	fclose(file);
+	cli_error("failed to read the main file");
+	return EXIT_FAILURE;
+}
+
 
 int
 cli_run(int argc, char **argv)

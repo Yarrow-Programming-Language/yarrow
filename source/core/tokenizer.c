@@ -7,11 +7,6 @@
 
 #include "tokenizer.h"
 
-// Error function with arguments check safe-guard
-
-#if defined(__GNUC__)
-__attribute__((format(printf, 1, 2)))
-#endif
 static void
 tokenizer_error(const char *format, ...)
 {
@@ -24,10 +19,9 @@ tokenizer_error(const char *format, ...)
 	va_end(args);
 }
 
-// Some helper functions
 
 static int
-tokenizer_grow(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t count)
+tokenizer_grow_tokens(Token **tokens, size_t *capacity)
 {
 	size_t new_capacity = *capacity == 0 ? 64 : *capacity * 2;
 	Token *grow = realloc(*tokens, new_capacity * sizeof(Token));
@@ -91,7 +85,7 @@ tokenizer_match(Tokenizer *tokenizer, char character)
 static int
 tokenizer_add_token(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count, TokenKind kind)
 {
-	if (*count >= *capacity && tokenizer_grow(tokenizer, tokens, capacity, *count) != EXIT_SUCCESS)
+	if (*count >= *capacity && tokenizer_grow_tokens(tokens, capacity) != EXIT_SUCCESS)
 	{
 		return EXIT_FAILURE;
 	}
@@ -122,7 +116,6 @@ tokenizer_is_digit(char character)
 	return character >= '0' && character <= '9';
 }
 
-// All the important stuff
 
 int
 tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
@@ -391,7 +384,7 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 	return EXIT_SUCCESS;
 
 	error:
-	free(tokens);
+	free(*tokens);
 	*tokens = NULL;
 	*count = 0;
 	return EXIT_FAILURE;
