@@ -179,7 +179,6 @@ cli_execute_global_flags(const Cli *cli, const CliParsedResult *result)
 		return true;
 	}
 
-	// Should also print the tokenizer, interpreter, ast and compiler version
 	if (cli_has_flag(result, "version"))
 	{
 		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\nTokenizer version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION, TOKENIZER_VERSION);
@@ -530,16 +529,12 @@ int
 cli_debug_tokens_command(const CliParsedResult *result)
 {
 	const char *input = cli_get_flag_value(result, "input");
-	if (input != NULL)
-	{
-		assert(0 && "Not implemented");
-		return EXIT_FAILURE;
-	}
+	const char *file_path = input != NULL ? input : "main.yar";
 
-	FILE *file = fopen("main.yar", "r");
+	FILE *file = fopen(file_path, "r");
 	if (file == NULL)
 	{
-		cli_error("no main file can be found in the current directory");
+		cli_error("no file can be found at %s", file_path);
 		return EXIT_FAILURE;
 	}
 
@@ -577,7 +572,7 @@ cli_debug_tokens_command(const CliParsedResult *result)
 	for (size_t i = 0; i < token_count; i++)
 	{
 		Token *token = &tokens[i];
-		printf("main.yar:%d:%d kind=%d lexem='%.*s'\n", token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
+		printf("%s:%d:%d kind=%d lexem='%.*s'\n", file_path, token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
 	}
 
 	free(tokens);
@@ -586,7 +581,7 @@ cli_debug_tokens_command(const CliParsedResult *result)
 
 	error:
 	fclose(file);
-	cli_error("failed to read the main file");
+	cli_error("failed to read the file at %s", file_path);
 	return EXIT_FAILURE;
 }
 
