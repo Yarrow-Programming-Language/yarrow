@@ -8,12 +8,10 @@
 
 ---
 
-This is a side-quest to rewrite this language in C without the use or with a minimal use of LLMs.
+This is a side-quest to rewrite this language in C.
 
-# Goals
+## Goals
 
-- I want a standard language design independent from the compiler (like C standard but without the stdlib part)
-- I want a compiler that transform it's ast to [QBE](https://c9x.me/compile/)
-- I want an interpreter that read and interpret the ast
-
-Just three gaols but a lot of work.
+- Having a standard that tells how a Yarrow compiler should behave.
+- Transpiling to the [QBE](https://c9x.me/compile/) intermediate representation before compilation (AOT).
+- Optionnaly, interpreting the AST.
