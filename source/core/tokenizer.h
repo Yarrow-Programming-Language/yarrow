@@ -110,6 +110,68 @@ typedef enum {
 } TokenKind;
 
 typedef struct {
+	const char *word;
+	TokenKind kind;
+} TokenizerKeyword;
+
+static const TokenizerKeyword tokenizer_keywords[] = {
+	{ "and", TOKEN_AND },
+	{ "or", TOKEN_OR },
+	{ "not", TOKEN_NOT },
+	{ "xor", TOKEN_XOR },
+	{ "true", TOKEN_TRUE },
+	{ "false", TOKEN_FALSE },
+	{ "if", TOKEN_IF },
+	{ "else", TOKEN_ELSE },
+	{ "for", TOKEN_FOR },
+	{ "continue", TOKEN_CONTINUE },
+	{ "break", TOKEN_BREAK },
+	{ "match", TOKEN_MATCH },
+	{ "case", TOKEN_CASE },
+	{ "as", TOKEN_AS },
+	{ "unwrap", TOKEN_UNWRAP },
+	{ "try", TOKEN_TRY },
+	{ "handle", TOKEN_HANDLE },
+	{ "function", TOKEN_FUNCTION },
+	{ "return", TOKEN_RETURN },
+	{ "typeof", TOKEN_TYPEOF },
+	{ "sizeof", TOKEN_SIZEOF },
+	{ "call", TOKEN_CALL },
+	{ "do", TOKEN_DO },
+	{ "with", TOKEN_WITH },
+	{ "end", TOKEN_END },
+	{ "const", TOKEN_CONST },
+	{ "static", TOKEN_STATIC },
+	{ "mutable", TOKEN_MUTABLE },
+	{ "set", TOKEN_SET },
+	{ "unsafe", TOKEN_UNSAFE },
+	{ "public", TOKEN_PUBLIC },
+	{ "private", TOKEN_PRIVATE },
+	{ "error", TOKEN_ERROR },
+	{ "struct", TOKEN_STRUCT },
+	{ "implement", TOKEN_IMPLEMENT },
+	{ "enum", TOKEN_ENUM },
+	{ "union", TOKEN_UNION },
+	{ "require", TOKEN_REQUIRE },
+	{ "defer", TOKEN_DEFER },
+	{ "inc", TOKEN_INC },
+	{ "dec", TOKEN_DEC },
+	{ "pop", TOKEN_POP },
+	{ "drop", TOKEN_DROP },
+	{ "dup", TOKEN_DUP },
+	{ "rot", TOKEN_ROT },
+	{ "unrot", TOKEN_UNROT },
+	{ "swap", TOKEN_SWAP },
+	{ "borrow", TOKEN_BORROW },
+	{ "mutable_borrow", TOKEN_MUTABLE_BORROW },
+	{ "move", TOKEN_MOVE },
+	{ "load", TOKEN_LOAD },
+	{ "store", TOKEN_STORE },
+	{ "void", TOKEN_VOID },
+	{ "null", TOKEN_NULL }
+};
+
+typedef struct {
 	int line;
 	int column;
 } TokenLocation;

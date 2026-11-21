@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "tokenizer.h"
 
@@ -70,6 +71,17 @@ tokenizer_advance(Tokenizer *tokenizer)
 	return character;
 }
 
+static int
+tokenizer_skip_line(Tokenizer *tokenizer)
+{
+	while(tokenizer_peek(tokenizer) != '\n' && tokenizer_peek(tokenizer) != '\0')
+	{
+		tokenizer_advance(tokenizer);
+	}
+
+	return EXIT_SUCCESS;
+}
+
 static bool
 tokenizer_match(Tokenizer *tokenizer, char character)
 {
@@ -116,6 +128,58 @@ tokenizer_is_digit(char character)
 	return character >= '0' && character <= '9';
 }
 
+static bool
+tokenizer_is_identifier_char(char character)
+{
+	return tokenizer_is_identifier_start(character) || tokenizer_is_digit(character);
+}
+
+static char
+tokenizer_lowercase(char character)
+{
+	if (character >= 'A' && character <= 'Z')
+	{
+		return (char) (character + 'a' - 'A');
+	}
+
+	return character;
+}
+
+static bool
+tokenizer_keyword_kind(const char *lexeme, size_t length, TokenKind *kind)
+{
+	size_t keyword_count = sizeof(tokenizer_keywords) / sizeof(tokenizer_keywords[0]);
+
+	for (size_t i = 0; i < keyword_count; i++)
+	{
+		const TokenizerKeyword *keyword = &tokenizer_keywords[i];
+
+		if (strlen(keyword->word) != length)
+		{
+			continue;
+		}
+
+		bool match = true;
+
+		for (size_t j = 0; j < length; j++)
+		{
+			if (tokenizer_lowercase(lexeme[j]) != keyword->word[j])
+			{
+				match = false;
+				break;
+			}
+		}
+
+		if (match)
+		{
+			*kind = keyword->kind;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 
 int
 tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
@@ -142,8 +206,37 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 
 		if (tokenizer_is_identifier_start(character))
 		{
-			// Check for any identifier not defined as a keyword
-			assert(0 && "Not implemented");
+			while (tokenizer_is_identifier_char(tokenizer_peek(&tokenizer)))
+			{
+				tokenizer_advance(&tokenizer);
+			}
+
+			size_t length = (size_t) (tokenizer.current - tokenizer.start);
+			TokenKind kind = TOKEN_IDENTIFIER;
+
+			if (character == '@')
+			{
+				kind = TOKEN_AT;
+			}
+			else if (character == '_' && length == 1)
+			{
+				kind = TOKEN_UNDERSCORE;
+			}
+			else
+			{
+				TokenKind keyword_kind;
+
+				if (tokenizer_keyword_kind(tokenizer.start, length, &keyword_kind))
+				{
+					kind = keyword_kind;
+				}
+			}
+
+			if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, kind) != EXIT_SUCCESS)
+			{
+				goto error;
+			}
+
 			continue;
 		}
 
@@ -159,12 +252,11 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 			case ' ':
 			case '\t':
 			case '\r':
-				break;
-
 			case '\n':
 				break;
 
 			case '#':
+				tokenizer_skip_line(&tokenizer);
 				break;
 
 			case '(':
