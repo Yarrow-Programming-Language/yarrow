@@ -129,6 +129,26 @@ tokenizer_is_digit(char character)
 }
 
 static bool
+tokenizer_is_binary_digit(char character)
+{
+	return character == '0' || character == '1';
+}
+
+static bool
+tokenizer_is_octal_digit(char character)
+{
+	return character >= '0' && character <= '7';
+}
+
+static bool
+tokenizer_is_hex_digit(char character)
+{
+	return tokenizer_is_digit(character)
+		|| (character >= 'a' && character <= 'f')
+		|| (character >= 'A' && character <= 'F');
+}
+
+static bool
 tokenizer_is_identifier_char(char character)
 {
 	return tokenizer_is_identifier_start(character) || tokenizer_is_digit(character);
@@ -178,6 +198,146 @@ tokenizer_keyword_kind(const char *lexeme, size_t length, TokenKind *kind)
 	}
 
 	return false;
+}
+
+static bool
+tokenizer_consume_digits(Tokenizer *tokenizer, bool (*is_digit)(char), bool require_digit)
+{
+	bool seen_digit = !require_digit;
+	bool trailing_underscore = false;
+
+	while (true)
+	{
+		char character = tokenizer_peek(tokenizer);
+
+		if (character == '_')
+		{
+			if (!seen_digit)
+			{
+				return false;
+			}
+
+			trailing_underscore = true;
+		}
+		else if (is_digit(character))
+		{
+			seen_digit = true;
+			trailing_underscore = false;
+		}
+		else
+		{
+			break;
+		}
+
+		tokenizer_advance(tokenizer);
+	}
+
+	if (!seen_digit || trailing_underscore)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+static int
+tokenizer_number(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count)
+{
+	TokenKind kind = TOKEN_INTEGER;
+
+	// The first digit has already been consumed by the caller.
+	if (*tokenizer->start == '0')
+	{
+		char prefix = tokenizer_peek(tokenizer);
+
+		if (prefix == 'b' || prefix == 'B' || prefix == 'o' || prefix == 'O' || prefix == 'x' || prefix == 'X')
+		{
+			bool (*is_digit)(char);
+
+			switch (prefix)
+			{
+				case 'b':
+				case 'B':
+					kind = TOKEN_BINARY_INTEGER;
+					is_digit = tokenizer_is_binary_digit;
+					break;
+
+				case 'o':
+				case 'O':
+					kind = TOKEN_OCTAL_INTEGER;
+					is_digit = tokenizer_is_octal_digit;
+					break;
+
+				default:
+					kind = TOKEN_HEX_INTEGER;
+					is_digit = tokenizer_is_hex_digit;
+					break;
+			}
+
+			tokenizer_advance(tokenizer);
+
+			if (!tokenizer_consume_digits(tokenizer, is_digit, true)
+				|| tokenizer_is_identifier_char(tokenizer_peek(tokenizer)))
+			{
+				tokenizer_error("invalid number literal at %d:%d", tokenizer->start_line, tokenizer->start_column);
+				return EXIT_FAILURE;
+			}
+
+			return tokenizer_add_token(tokenizer, tokens, capacity, count, kind);
+		}
+	}
+
+	if (!tokenizer_consume_digits(tokenizer, tokenizer_is_digit, false))
+	{
+		tokenizer_error("invalid number literal at %d:%d", tokenizer->start_line, tokenizer->start_column);
+		return EXIT_FAILURE;
+	}
+
+	if (tokenizer_peek(tokenizer) == '.' && tokenizer_is_digit(tokenizer_peek_next(tokenizer)))
+	{
+		tokenizer_advance(tokenizer);
+
+		if (!tokenizer_consume_digits(tokenizer, tokenizer_is_digit, true))
+		{
+			tokenizer_error("invalid number literal at %d:%d", tokenizer->start_line, tokenizer->start_column);
+			return EXIT_FAILURE;
+		}
+
+		kind = TOKEN_FLOAT;
+	}
+
+	char exponent = tokenizer_peek(tokenizer);
+
+	if (exponent == 'e' || exponent == 'E')
+	{
+		char sign = tokenizer_peek_next(tokenizer);
+		bool has_digits = tokenizer_is_digit(sign);
+
+		if (!has_digits && (sign == '+' || sign == '-'))
+		{
+			has_digits = tokenizer_is_digit(tokenizer->current[2]);
+		}
+
+		if (has_digits)
+		{
+			tokenizer_advance(tokenizer);
+
+			if (sign == '+' || sign == '-')
+			{
+				tokenizer_advance(tokenizer);
+			}
+
+			if (!tokenizer_consume_digits(tokenizer, tokenizer_is_digit, true))
+			{
+				tokenizer_error("invalid number literal at %d:%d", tokenizer->start_line, tokenizer->start_column);
+				return EXIT_FAILURE;
+			}
+
+			kind = TOKEN_SCIENTIFIC_FLOAT;
+		}
+	}
+
+	return tokenizer_add_token(tokenizer, tokens, capacity, count, kind);
 }
 
 
@@ -242,8 +402,11 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 
 		if (tokenizer_is_digit(character))
 		{
-			// Check for `+`, '-', integers, float
-			assert(0 && "Not implemented");
+			if (tokenizer_number(&tokenizer, tokens, &capacity, count) != EXIT_SUCCESS)
+			{
+				goto error;
+			}
+
 			continue;
 		}
 
