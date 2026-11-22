@@ -91,7 +91,7 @@ parser_expect(Parser *parser, TokenKind kind, const char *what)
 static bool
 parser_is_type_start(TokenKind kind)
 {
-	return kind == TOKEN_TYPE || kind == TOKEN_IDENTIFIER || kind == TOKEN_VOID;
+	return kind == TOKEN_TYPE || kind == TOKEN_IDENTIFIER;
 }
 
 static bool
@@ -876,7 +876,6 @@ parser_parse_word(Parser *parser, AstBody *body)
 
 		case TOKEN_IDENTIFIER:
 		case TOKEN_TYPE:
-		case TOKEN_VOID:
 		case TOKEN_ERROR:
 			return parser_parse_name_word(parser, body);
 

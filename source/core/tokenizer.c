@@ -116,7 +116,6 @@ tokenizer_kind_name(TokenKind kind)
 		case TOKEN_MOVE: return "move";
 		case TOKEN_LOAD: return "load";
 		case TOKEN_STORE: return "store";
-		case TOKEN_VOID: return "void";
 		case TOKEN_NULL: return "null";
 		case TOKEN_EOF: return "eof";
 	}

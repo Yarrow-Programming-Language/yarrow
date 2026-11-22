@@ -104,7 +104,6 @@ typedef enum {
 	TOKEN_MOVE,
 	TOKEN_LOAD,
 	TOKEN_STORE,
-	TOKEN_VOID,
 	TOKEN_NULL,
 	TOKEN_EOF
 } TokenKind;
@@ -169,8 +168,8 @@ static const TokenizerKeyword tokenizer_keywords[] = {
 	{ "move", TOKEN_MOVE },
 	{ "load", TOKEN_LOAD },
 	{ "store", TOKEN_STORE },
-	{ "void", TOKEN_VOID },
 	{ "null", TOKEN_NULL },
+	{ "void", TOKEN_TYPE },
 	{ "string", TOKEN_TYPE },
 	{ "rune", TOKEN_TYPE },
 	{ "bool", TOKEN_TYPE },
