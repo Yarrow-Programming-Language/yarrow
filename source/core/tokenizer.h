@@ -192,7 +192,8 @@ typedef struct {
 	int start_column;
 } Tokenizer;
 
-int tokenizer_tokenize(const char *source, Token **tokens, size_t *count);
 const char *tokenizer_kind_name(TokenKind kind);
+
+int tokenizer_tokenize(const char *source, Token **tokens, size_t *count);
 
 #endif

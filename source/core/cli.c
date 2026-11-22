@@ -9,6 +9,7 @@
 #include "cli.h"
 #include "fmt.h"
 #include "lsp.h"
+#include "parser.h"
 #include "tokenizer.h"
 
 static void
@@ -181,7 +182,7 @@ cli_execute_global_flags(const Cli *cli, const CliParsedResult *result)
 
 	if (cli_has_flag(result, "version"))
 	{
-		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\nTokenizer version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION, TOKENIZER_VERSION);
+		printf("Cli version: %s\nFmt version: %s\nLsp version: %s\nTokenizer version: %s\nParser version: %s\n", CLI_VERSION, FMT_VERSION, LSP_VERSION, TOKENIZER_VERSION, PARSER_VERSION);
 		return true;
 	}
 
@@ -511,11 +512,86 @@ cli_debug_command(const CliParsedResult *result)
 	return EXIT_FAILURE;
 }
 
+static char *
+cli_read_file(const char *file_path)
+{
+	FILE *file = fopen(file_path, "r");
+
+	if (file == NULL)
+	{
+		cli_error("no file can be found at %s", file_path);
+		return NULL;
+	}
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		goto error;
+	}
+
+	long size = ftell(file);
+
+	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		goto error;
+	}
+
+	char *content = malloc((size_t) size + 1);
+
+	if (content == NULL)
+	{
+		goto error;
+	}
+
+	size_t read = fread(content, 1, (size_t) size, file);
+	fclose(file);
+	content[read] = '\0';
+
+	return content;
+
+	error:
+	fclose(file);
+	cli_error("failed to read the file at %s", file_path);
+	return NULL;
+}
+
 int
 cli_debug_ast_command(const CliParsedResult *result)
 {
-	assert(0 && "Not implemented");
-	return EXIT_FAILURE;
+	const char *input = cli_get_flag_value(result, "input");
+	const char *file_path = input != NULL ? input : "main.yar";
+
+	char *content = cli_read_file(file_path);
+	if (content == NULL)
+	{
+		return EXIT_FAILURE;
+	}
+
+	Token *tokens = NULL;
+	size_t token_count = 0;
+
+	if (tokenizer_tokenize(content, &tokens, &token_count) != EXIT_SUCCESS || tokens == NULL)
+	{
+		free(content);
+		cli_error("failed to tokenize the file at %s", file_path);
+		return EXIT_FAILURE;
+	}
+
+	AstBody program;
+
+	if (parser_parse(tokens, token_count, &program) != EXIT_SUCCESS)
+	{
+		parser_free(&program);
+		free(tokens);
+		free(content);
+		return EXIT_FAILURE;
+	}
+
+	parser_print(&program);
+
+	parser_free(&program);
+	free(tokens);
+	free(content);
+	return EXIT_SUCCESS;
 }
 
 int
@@ -531,33 +607,11 @@ cli_debug_tokens_command(const CliParsedResult *result)
 	const char *input = cli_get_flag_value(result, "input");
 	const char *file_path = input != NULL ? input : "main.yar";
 
-	FILE *file = fopen(file_path, "r");
-	if (file == NULL)
-	{
-		cli_error("no file can be found at %s", file_path);
-		return EXIT_FAILURE;
-	}
-
-	if (fseek(file, 0, SEEK_END) != 0)
-	{
-		goto error;
-	}
-
-	long size = ftell(file);
-	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
-	{
-		goto error;
-	}
-
-	char *content = malloc((size_t) size + 1);
+	char *content = cli_read_file(file_path);
 	if (content == NULL)
 	{
-		goto error;
+		return EXIT_FAILURE;
 	}
-
-	size_t read = fread(content, 1, (size_t) size, file);
-	fclose(file);
-	content[read] = '\0';
 
 	Token *tokens = NULL;
 	size_t token_count = 0;
@@ -578,11 +632,6 @@ cli_debug_tokens_command(const CliParsedResult *result)
 	free(tokens);
 	free(content);
 	return EXIT_SUCCESS;
-
-	error:
-	fclose(file);
-	cli_error("failed to read the file at %s", file_path);
-	return EXIT_FAILURE;
 }
 
 
@@ -655,6 +704,16 @@ cli_run(int argc, char **argv)
 					{
 						.name = "ast",
 						.description = "Print the current program AST.",
+						.flags = (CliFlag[]) {
+							{
+								.name = "input",
+								.short_name = "i",
+								.description = "File path to input source file.",
+								.takes_value = CLI_FLAG_REQUIRED_VALUE,
+								.value_name = "file"
+							},
+							{ 0 }
+						},
 						.handler = cli_debug_ast_command
 					},
 					{
