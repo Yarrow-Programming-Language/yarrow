@@ -548,6 +548,26 @@ tokenizer_tokenize_rune(Tokenizer *tokenizer, Token **tokens, size_t *capacity, 
 	return tokenizer_add_token(tokenizer, tokens, capacity, count, TOKEN_RUNE);
 }
 
+void
+tokenizer_free(Token **tokens)
+{
+	if (tokens != NULL)
+	{
+		free(*tokens);
+		*tokens = NULL;
+	}
+}
+
+void
+tokenizer_print(const Token *tokens, size_t count)
+{
+	for (size_t i = 0; i < count; i++)
+	{
+		const Token *token = &tokens[i];
+		printf("%d:%d kind=%s lexem='%.*s'\n", token->location.line, token->location.column, tokenizer_kind_name(token->kind), (int) token->length, token->lexeme);
+	}
+}
+
 
 int
 tokenizer_tokenize(const char *source, Token **tokens, size_t *count)

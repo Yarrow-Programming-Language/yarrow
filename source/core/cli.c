@@ -581,7 +581,7 @@ cli_debug_ast_command(const CliParsedResult *result)
 	if (parser_parse(tokens, token_count, &program) != EXIT_SUCCESS)
 	{
 		parser_free(&program);
-		free(tokens);
+		tokenizer_free(&tokens);
 		free(content);
 		return EXIT_FAILURE;
 	}
@@ -589,7 +589,7 @@ cli_debug_ast_command(const CliParsedResult *result)
 	parser_print(&program);
 
 	parser_free(&program);
-	free(tokens);
+	tokenizer_free(&tokens);
 	free(content);
 	return EXIT_SUCCESS;
 }
@@ -623,13 +623,9 @@ cli_debug_tokens_command(const CliParsedResult *result)
 		return EXIT_FAILURE;
 	}
 
-	for (size_t i = 0; i < token_count; i++)
-	{
-		Token *token = &tokens[i];
-		printf("%s:%d:%d kind=%s lexem='%.*s'\n", file_path, token->location.line, token->location.column, tokenizer_kind_name(token->kind), (int) token->length, token->lexeme);
-	}
+	tokenizer_print(tokens, token_count);
 
-	free(tokens);
+	tokenizer_free(&tokens);
 	free(content);
 	return EXIT_SUCCESS;
 }
