@@ -155,7 +155,7 @@ parser_new_node(const Token *token, AstKind kind)
 }
 
 static int
-ast_body_push(AstBody *body, AstNode *node)
+parser_ast_body_push(AstBody *body, AstNode *node)
 {
 	if (body->count >= body->capacity)
 	{
@@ -176,11 +176,11 @@ ast_body_push(AstBody *body, AstNode *node)
 }
 
 static int
-ast_body_append(AstBody *destination, AstBody *source)
+parser_ast_body_append(AstBody *destination, AstBody *source)
 {
 	for (size_t i = 0; i < source->count; i++)
 	{
-		if (ast_body_push(destination, source->items[i]) != EXIT_SUCCESS)
+		if (parser_ast_body_push(destination, source->items[i]) != EXIT_SUCCESS)
 		{
 			for (size_t j = i; j < source->count; j++)
 			{
@@ -380,7 +380,7 @@ parser_parse_simple(Parser *parser, AstBody *body)
 
 	parser_advance(parser);
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -422,7 +422,7 @@ parser_parse_require(Parser *parser, AstBody *body)
 		return EXIT_FAILURE;
 	}
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -469,7 +469,7 @@ parser_parse_if(Parser *parser, AstBody *body)
 		goto error;
 	}
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -523,7 +523,7 @@ parser_parse_block(Parser *parser, AstBody *body, TokenKind kind)
 		goto error;
 	}
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -588,7 +588,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 
 		while (parser_check(parser, TOKEN_CASE))
 		{
-			if (ast_body_append(&case_node->as.match_case.condition, &segment) != EXIT_SUCCESS)
+			if (parser_ast_body_append(&case_node->as.match_case.condition, &segment) != EXIT_SUCCESS)
 			{
 				parser_free_body(&segment);
 				parser_free_node(case_node);
@@ -608,7 +608,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 		case_node->as.match_case.body = segment;
 		parser_match(parser, TOKEN_END);
 
-		if (ast_body_push(&node->as.match.cases, case_node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(&node->as.match.cases, case_node) != EXIT_SUCCESS)
 		{
 			parser_free_node(case_node);
 			goto error;
@@ -638,7 +638,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 		goto error;
 	}
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -677,7 +677,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		node->as.as_cast.type = type;
 
-		if (ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -724,7 +724,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		node->as.variable.mutability = *mutability;
 		node->as.variable.type = variable_type;
 
-		if (ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -747,7 +747,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		node->as.set.name = name;
 
-		if (ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -797,7 +797,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 			node->as.call.name = name;
 		}
 
-		if (ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -816,7 +816,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 	node->as.word.name = name;
 
-	if (ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -941,7 +941,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 
 		param->as.param.type = type;
 
-		if (ast_body_push(&node->as.function.params, param) != EXIT_SUCCESS)
+		if (parser_ast_body_push(&node->as.function.params, param) != EXIT_SUCCESS)
 		{
 			parser_free_node(param);
 			goto error;
@@ -978,7 +978,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 		node->as.function.has_result = true;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1040,7 +1040,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 		field->as.field.name = (AstName) { .first = field_name, .count = 1 };
 		field->as.field.is_public = field_public;
 
-		if (ast_body_push(&node->as.struct_decl.fields, field) != EXIT_SUCCESS)
+		if (parser_ast_body_push(&node->as.struct_decl.fields, field) != EXIT_SUCCESS)
 		{
 			parser_free_node(field);
 			goto error;
@@ -1052,7 +1052,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 		goto error;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1094,7 +1094,7 @@ parser_parse_members(Parser *parser, AstBody *members)
 			parser_advance(parser);
 		}
 
-		if (ast_body_push(members, node) != EXIT_SUCCESS)
+		if (parser_ast_body_push(members, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1124,7 +1124,7 @@ parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, Ast
 		goto error;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1169,7 +1169,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 
 		member->as.union_member.type = type;
 
-		if (ast_body_push(&node->as.union_decl.members, member) != EXIT_SUCCESS)
+		if (parser_ast_body_push(&node->as.union_decl.members, member) != EXIT_SUCCESS)
 		{
 			parser_free_node(member);
 			goto error;
@@ -1181,7 +1181,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 		goto error;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1211,7 +1211,7 @@ parser_parse_error_decl(Parser *parser, AstBody *program, const Token *name_toke
 		goto error;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1248,7 +1248,7 @@ parser_parse_implement(Parser *parser, AstBody *program, const Token *name_token
 		goto error;
 	}
 
-	if (ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
