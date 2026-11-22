@@ -76,13 +76,11 @@ my_function private function do
 	1 2 and              # 0
 	1 5 or               # 5
 	4 5 xor              # 1
-	5 2 <<               # 20
 	5 2 left_shift       # 20
-	5 2 >>               # 1
 	5 2 right_shift      # 1
 	5 not                # -6 (two's complement style bitwise not)
 
-	# Stack: [0, 5, 1, 20, 20, 1, 1, -6]
+	# Stack: [0, 5, 1, 20, 1, -6]
 	drop
 
 	# -------------------------------------------------------------------------
