@@ -376,6 +376,105 @@ parser_validate_type(const Token *tokens, size_t count)
 	return true;
 }
 
+static bool
+parser_scan_generic_arguments(Parser *parser)
+{
+	size_t depth = 1;
+
+	parser_advance(parser);
+
+	while (depth > 0)
+	{
+		TokenKind kind = parser_peek(parser)->kind;
+
+		if (kind == TOKEN_EOF)
+		{
+			return false;
+		}
+
+		if (kind == TOKEN_LESS)
+		{
+			depth++;
+		}
+		else if (kind == TOKEN_GREATER)
+		{
+			depth--;
+		}
+
+		parser_advance(parser);
+	}
+
+	return true;
+}
+
+static bool
+parser_scan_struct_type(Parser *parser)
+{
+	size_t depth = 1;
+
+	parser_advance(parser);
+
+	while (depth > 0)
+	{
+		TokenKind kind = parser_peek(parser)->kind;
+
+		if (kind == TOKEN_EOF)
+		{
+			return false;
+		}
+
+		if (kind == TOKEN_LEFT_CURLY)
+		{
+			depth++;
+		}
+		else if (kind == TOKEN_RIGHT_CURLY)
+		{
+			depth--;
+		}
+
+		parser_advance(parser);
+	}
+
+	return true;
+}
+
+static bool
+parser_scan_union_member(Parser *parser)
+{
+	TokenKind kind = parser_peek(parser)->kind;
+
+	if (kind == TOKEN_UNDERSCORE)
+	{
+		parser_advance(parser);
+		return true;
+	}
+
+	if (kind == TOKEN_LEFT_CURLY)
+	{
+		return parser_scan_struct_type(parser);
+	}
+
+	if (!parser_is_type_start(kind))
+	{
+		return false;
+	}
+
+	parser_advance(parser);
+
+	while (parser_check(parser, TOKEN_DOT) && parser_peek_at(parser, 1)->kind == TOKEN_IDENTIFIER)
+	{
+		parser_advance(parser);
+		parser_advance(parser);
+	}
+
+	if (parser_check(parser, TOKEN_LESS))
+	{
+		return parser_scan_generic_arguments(parser);
+	}
+
+	return true;
+}
+
 static ParserTypeStatus
 parser_parse_type(Parser *parser, AstType *type)
 {
@@ -384,8 +483,11 @@ parser_parse_type(Parser *parser, AstType *type)
 
 	if (first->kind == TOKEN_PIPE)
 	{
-		// Union literal type: |i32 string|. The member types cannot contain pipes.
+		// Union literal type: |i32 string|. Unions cannot nest, so the
+		// first pipe at member level always closes the union.
 		parser_advance(parser);
+
+		size_t members = 0;
 
 		while (!parser_check(parser, TOKEN_PIPE))
 		{
@@ -394,10 +496,32 @@ parser_parse_type(Parser *parser, AstType *type)
 				return PARSER_TYPE_ABSENT;
 			}
 
-			parser_advance(parser);
+			if (!parser_scan_union_member(parser))
+			{
+				if (parser_check(parser, TOKEN_EOF))
+				{
+					return PARSER_TYPE_ABSENT;
+				}
+
+				// Not the start of a member: keep scanning to the
+				// closing pipe so the validator can report the
+				// offending token.
+				parser_advance(parser);
+				continue;
+			}
+
+			members++;
 		}
 
+		const Token *close = parser_peek(parser);
+
 		parser_advance(parser);
+
+		if (members == 0 && parser_is_type_start(parser_peek(parser)->kind))
+		{
+			parser_error(close, "union types cannot nest");
+			return PARSER_TYPE_INVALID;
+		}
 
 		if (!parser_validate_type(first, parser->current - start))
 		{
@@ -412,29 +536,9 @@ parser_parse_type(Parser *parser, AstType *type)
 	if (first->kind == TOKEN_LEFT_CURLY)
 	{
 		// Struct literal type: {i32 x i32 y}.
-		size_t depth = 1;
-
-		parser_advance(parser);
-
-		while (depth > 0)
+		if (!parser_scan_struct_type(parser))
 		{
-			TokenKind kind = parser_peek(parser)->kind;
-
-			if (kind == TOKEN_EOF)
-			{
-				return PARSER_TYPE_ABSENT;
-			}
-
-			if (kind == TOKEN_LEFT_CURLY)
-			{
-				depth++;
-			}
-			else if (kind == TOKEN_RIGHT_CURLY)
-			{
-				depth--;
-			}
-
-			parser_advance(parser);
+			return PARSER_TYPE_ABSENT;
 		}
 
 		if (!parser_validate_type(first, parser->current - start))
@@ -462,29 +566,9 @@ parser_parse_type(Parser *parser, AstType *type)
 
 	if (parser_check(parser, TOKEN_LESS))
 	{
-		size_t depth = 1;
-
-		parser_advance(parser);
-
-		while (depth > 0)
+		if (!parser_scan_generic_arguments(parser))
 		{
-			TokenKind kind = parser_peek(parser)->kind;
-
-			if (kind == TOKEN_EOF)
-			{
-				return false;
-			}
-
-			if (kind == TOKEN_LESS)
-			{
-				depth++;
-			}
-			else if (kind == TOKEN_GREATER)
-			{
-				depth--;
-			}
-
-			parser_advance(parser);
+			return PARSER_TYPE_ABSENT;
 		}
 	}
 
@@ -1072,6 +1156,10 @@ parser_parse_word(Parser *parser, AstBody *body)
 
 		case TOKEN_WITH:
 			parser_error(token, "unexpected `with` in a body; `with` is only allowed after a function `end` to declare its return type");
+			return EXIT_FAILURE;
+
+		case TOKEN_PIPE:
+			parser_error(token, "unexpected `|` in a body; `|` is only used in union types and unions cannot nest");
 			return EXIT_FAILURE;
 
 		case TOKEN_IDENTIFIER:
