@@ -847,6 +847,10 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 		}
 	}
 
+	tokenizer.start = tokenizer.current;
+	tokenizer.start_line = tokenizer.line;
+	tokenizer.start_column = tokenizer.column;
+
 	if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_EOF) != EXIT_SUCCESS)
 	{
 		goto error;
