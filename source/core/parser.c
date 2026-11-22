@@ -1421,36 +1421,6 @@ parser_free_node(AstNode *node)
 	free(node);
 }
 
-int
-parser_parse(const Token *tokens, size_t count, AstBody *program)
-{
-	if (tokens == NULL || count == 0 || program == NULL)
-	{
-		return EXIT_FAILURE;
-	}
-
-	Parser parser = {
-		.tokens = tokens,
-		.count = count,
-		.current = 0
-	};
-
-	program->items = NULL;
-	program->count = 0;
-	program->capacity = 0;
-
-	while (!parser_check(&parser, TOKEN_EOF))
-	{
-		if (parser_parse_declaration(&parser, program) != EXIT_SUCCESS)
-		{
-			parser_free(program);
-			return EXIT_FAILURE;
-		}
-	}
-
-	return EXIT_SUCCESS;
-}
-
 void
 parser_free(AstBody *program)
 {
@@ -1711,4 +1681,35 @@ void
 parser_print(const AstBody *program)
 {
 	parser_print_body(program, 0);
+}
+
+
+int
+parser_parse(const Token *tokens, size_t count, AstBody *program)
+{
+	if (tokens == NULL || count == 0 || program == NULL)
+	{
+		return EXIT_FAILURE;
+	}
+
+	Parser parser = {
+		.tokens = tokens,
+		.count = count,
+		.current = 0
+	};
+
+	program->items = NULL;
+	program->count = 0;
+	program->capacity = 0;
+
+	while (!parser_check(&parser, TOKEN_EOF))
+	{
+		if (parser_parse_declaration(&parser, program) != EXIT_SUCCESS)
+		{
+			parser_free(program);
+			return EXIT_FAILURE;
+		}
+	}
+
+	return EXIT_SUCCESS;
 }
