@@ -95,6 +95,22 @@ parser_is_type_start(TokenKind kind)
 }
 
 static bool
+parser_is_size_literal(TokenKind kind)
+{
+	switch (kind)
+	{
+		case TOKEN_INTEGER:
+		case TOKEN_BINARY_INTEGER:
+		case TOKEN_OCTAL_INTEGER:
+		case TOKEN_HEX_INTEGER:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+static bool
 parser_is_literal(TokenKind kind)
 {
 	switch (kind)
@@ -202,7 +218,165 @@ parser_ast_body_append(AstBody *destination, AstBody *source)
 	return EXIT_SUCCESS;
 }
 
+static const Token *
+parser_token_at(const Token *tokens, size_t count, size_t index)
+{
+	return index < count ? &tokens[index] : &tokens[count - 1];
+}
+
 static bool
+parser_validate_type_at(const Token *tokens, size_t count, size_t *cursor)
+{
+	if (*cursor >= count)
+	{
+		return false;
+	}
+
+	const Token *token = &tokens[*cursor];
+
+	switch (token->kind)
+	{
+		case TOKEN_PIPE:
+		{
+			(*cursor)++;
+
+			size_t members = 0;
+
+			while (*cursor < count && tokens[*cursor].kind != TOKEN_PIPE)
+			{
+				if (tokens[*cursor].kind == TOKEN_UNDERSCORE)
+				{
+					(*cursor)++;
+				}
+				else if (!parser_validate_type_at(tokens, count, cursor))
+				{
+					return false;
+				}
+
+				members++;
+			}
+
+			if (members == 0)
+			{
+				parser_error(token, "a union type cannot be empty");
+				return false;
+			}
+
+			if (*cursor >= count)
+			{
+				parser_error(&tokens[count - 1], "expected `|` to close the union type");
+				return false;
+			}
+
+			(*cursor)++;
+			return true;
+		}
+
+		case TOKEN_LEFT_CURLY:
+		{
+			(*cursor)++;
+
+			while (*cursor < count && tokens[*cursor].kind != TOKEN_RIGHT_CURLY)
+			{
+				if (!parser_validate_type_at(tokens, count, cursor))
+				{
+					return false;
+				}
+
+				if (*cursor >= count || tokens[*cursor].kind != TOKEN_IDENTIFIER)
+				{
+					parser_error(parser_token_at(tokens, count, *cursor), "expected a field name after the field type");
+					return false;
+				}
+
+				(*cursor)++;
+			}
+
+			if (*cursor >= count)
+			{
+				parser_error(&tokens[count - 1], "expected `}` to close the struct type");
+				return false;
+			}
+
+			(*cursor)++;
+			return true;
+		}
+
+		case TOKEN_TYPE:
+		case TOKEN_IDENTIFIER:
+		{
+			(*cursor)++;
+
+			while (*cursor + 1 < count && tokens[*cursor].kind == TOKEN_DOT && tokens[*cursor + 1].kind == TOKEN_IDENTIFIER)
+			{
+				*cursor += 2;
+			}
+
+			if (*cursor >= count || tokens[*cursor].kind != TOKEN_LESS)
+			{
+				return true;
+			}
+
+			(*cursor)++;
+
+			size_t arguments = 0;
+
+			while (*cursor < count && tokens[*cursor].kind != TOKEN_GREATER)
+			{
+				if (tokens[*cursor].kind == TOKEN_UNDERSCORE || parser_is_size_literal(tokens[*cursor].kind))
+				{
+					(*cursor)++;
+				}
+				else if (!parser_validate_type_at(tokens, count, cursor))
+				{
+					return false;
+				}
+
+				arguments++;
+			}
+
+			if (arguments == 0)
+			{
+				parser_error(parser_token_at(tokens, count, *cursor), "a generic type needs at least one argument");
+				return false;
+			}
+
+			if (*cursor >= count)
+			{
+				parser_error(&tokens[count - 1], "expected `>` to close the generic type");
+				return false;
+			}
+
+			(*cursor)++;
+			return true;
+		}
+
+		default:
+			parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+			return false;
+	}
+}
+
+static bool
+parser_validate_type(const Token *tokens, size_t count)
+{
+	size_t cursor = 0;
+
+	if (!parser_validate_type_at(tokens, count, &cursor))
+	{
+		return false;
+	}
+
+	if (cursor != count)
+	{
+		parser_error(&tokens[cursor], "unexpected `%.*s` after the type", (int) tokens[cursor].length, tokens[cursor].lexeme);
+		return false;
+	}
+
+	return true;
+}
+
+static ParserTypeStatus
 parser_parse_type(Parser *parser, AstType *type)
 {
 	const Token *first = parser_peek(parser);
@@ -217,7 +391,7 @@ parser_parse_type(Parser *parser, AstType *type)
 		{
 			if (parser_check(parser, TOKEN_EOF))
 			{
-				return false;
+				return PARSER_TYPE_ABSENT;
 			}
 
 			parser_advance(parser);
@@ -225,9 +399,14 @@ parser_parse_type(Parser *parser, AstType *type)
 
 		parser_advance(parser);
 
+		if (!parser_validate_type(first, parser->current - start))
+		{
+			return PARSER_TYPE_INVALID;
+		}
+
 		type->first = first;
 		type->count = parser->current - start;
-		return true;
+		return PARSER_TYPE_VALID;
 	}
 
 	if (first->kind == TOKEN_LEFT_CURLY)
@@ -243,7 +422,7 @@ parser_parse_type(Parser *parser, AstType *type)
 
 			if (kind == TOKEN_EOF)
 			{
-				return false;
+				return PARSER_TYPE_ABSENT;
 			}
 
 			if (kind == TOKEN_LEFT_CURLY)
@@ -258,14 +437,19 @@ parser_parse_type(Parser *parser, AstType *type)
 			parser_advance(parser);
 		}
 
+		if (!parser_validate_type(first, parser->current - start))
+		{
+			return PARSER_TYPE_INVALID;
+		}
+
 		type->first = first;
 		type->count = parser->current - start;
-		return true;
+		return PARSER_TYPE_VALID;
 	}
 
 	if (!parser_is_type_start(first->kind))
 	{
-		return false;
+		return PARSER_TYPE_ABSENT;
 	}
 
 	parser_advance(parser);
@@ -304,9 +488,14 @@ parser_parse_type(Parser *parser, AstType *type)
 		}
 	}
 
+	if (!parser_validate_type(first, parser->current - start))
+	{
+		return PARSER_TYPE_INVALID;
+	}
+
 	type->first = first;
 	type->count = parser->current - start;
-	return true;
+	return PARSER_TYPE_VALID;
 }
 
 static bool
@@ -663,8 +852,14 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 	// Type cast: <Type> as
 	size_t saved = parser->current;
 	AstType type;
+	ParserTypeStatus status = parser_parse_type(parser, &type);
 
-	if (parser_parse_type(parser, &type) && parser_check(parser, TOKEN_AS))
+	if (status == PARSER_TYPE_INVALID)
+	{
+		return EXIT_FAILURE;
+	}
+
+	if (status == PARSER_TYPE_VALID && parser_check(parser, TOKEN_AS))
 	{
 		parser_advance(parser);
 
@@ -706,10 +901,15 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		const Token *type_token = parser_peek(parser);
 		AstType variable_type;
+		ParserTypeStatus status = parser_parse_type(parser, &variable_type);
 
-		if (!parser_parse_type(parser, &variable_type))
+		if (status != PARSER_TYPE_VALID)
 		{
-			parser_error(type_token, "expected a type after `%.*s`", (int) mutability->length, mutability->lexeme);
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(type_token, "expected a type after `%.*s`", (int) mutability->length, mutability->lexeme);
+			}
+
 			return EXIT_FAILURE;
 		}
 
@@ -940,10 +1140,15 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 	{
 		const Token *param_token = parser_peek(parser);
 		AstType type;
+		ParserTypeStatus status = parser_parse_type(parser, &type);
 
-		if (!parser_parse_type(parser, &type))
+		if (status != PARSER_TYPE_VALID)
 		{
-			parser_error(param_token, "expected a parameter type but found `%.*s`", (int) param_token->length, param_token->lexeme);
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(param_token, "expected a parameter type but found `%.*s`", (int) param_token->length, param_token->lexeme);
+			}
+
 			goto error;
 		}
 
@@ -983,10 +1188,15 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 	if (parser_match(parser, TOKEN_WITH))
 	{
 		const Token *result_token = parser_peek(parser);
+		ParserTypeStatus status = parser_parse_type(parser, &node->as.function.result);
 
-		if (!parser_parse_type(parser, &node->as.function.result))
+		if (status != PARSER_TYPE_VALID)
 		{
-			parser_error(result_token, "expected a return type after `with`");
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(result_token, "expected a return type after `with`");
+			}
+
 			goto error;
 		}
 
@@ -1022,10 +1232,15 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 	{
 		const Token *field_token = parser_peek(parser);
 		AstType type;
+		ParserTypeStatus status = parser_parse_type(parser, &type);
 
-		if (!parser_parse_type(parser, &type))
+		if (status != PARSER_TYPE_VALID)
 		{
-			parser_error(field_token, "expected a field type but found `%.*s`", (int) field_token->length, field_token->lexeme);
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(field_token, "expected a field type but found `%.*s`", (int) field_token->length, field_token->lexeme);
+			}
+
 			goto error;
 		}
 
@@ -1168,10 +1383,15 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 	{
 		const Token *member_token = parser_peek(parser);
 		AstType type;
+		ParserTypeStatus status = parser_parse_type(parser, &type);
 
-		if (!parser_parse_type(parser, &type))
+		if (status != PARSER_TYPE_VALID)
 		{
-			parser_error(member_token, "expected a member type but found `%.*s`", (int) member_token->length, member_token->lexeme);
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(member_token, "expected a member type but found `%.*s`", (int) member_token->length, member_token->lexeme);
+			}
+
 			goto error;
 		}
 
@@ -1304,14 +1524,20 @@ parser_parse_named_declaration(Parser *parser, AstBody *program)
 	if (parser_is_type_start(parser_peek(parser)->kind))
 	{
 		size_t saved = parser->current;
+		ParserTypeStatus status = parser_parse_type(parser, &carrier);
 
-		if (parser_parse_type(parser, &carrier))
+		if (status == PARSER_TYPE_VALID)
 		{
 			has_carrier = true;
 		}
 		else
 		{
 			parser->current = saved;
+
+			if (status == PARSER_TYPE_INVALID)
+			{
+				return EXIT_FAILURE;
+			}
 		}
 	}
 
@@ -1434,15 +1660,6 @@ parser_free_node(AstNode *node)
 	}
 
 	free(node);
-}
-
-void
-parser_free(AstBody *program)
-{
-	if (program != NULL)
-	{
-		parser_free_body(program);
-	}
 }
 
 static void
@@ -1689,6 +1906,15 @@ parser_print_node(const AstNode *node, int depth)
 			printf("\n");
 			parser_print_body(&node->as.handle.body, depth + 1);
 			break;
+	}
+}
+
+void
+parser_free(AstBody *program)
+{
+	if (program != NULL)
+	{
+		parser_free_body(program);
 	}
 }
 

@@ -83,6 +83,12 @@ struct ast_node {
 	} as;
 };
 
+typedef enum {
+	PARSER_TYPE_ABSENT,
+	PARSER_TYPE_VALID,
+	PARSER_TYPE_INVALID
+} ParserTypeStatus;
+
 typedef struct {
 	const Token *tokens;
 	size_t count;

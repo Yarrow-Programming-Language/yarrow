@@ -441,6 +441,48 @@ cli_parse(const Cli *cli, int argc, char **argv, CliParsedResult *result)
 	return EXIT_FAILURE;
 }
 
+static char *
+cli_read_file(const char *file_path)
+{
+	FILE *file = fopen(file_path, "r");
+
+	if (file == NULL)
+	{
+		cli_error("no file can be found at %s", file_path);
+		return NULL;
+	}
+
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		goto error;
+	}
+
+	long size = ftell(file);
+
+	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
+	{
+		goto error;
+	}
+
+	char *content = malloc((size_t) size + 1);
+
+	if (content == NULL)
+	{
+		goto error;
+	}
+
+	size_t read = fread(content, 1, (size_t) size, file);
+	fclose(file);
+	content[read] = '\0';
+
+	return content;
+
+	error:
+	fclose(file);
+	cli_error("failed to read the file at %s", file_path);
+	return NULL;
+}
+
 
 int
 cli_run_command(const CliParsedResult *result)
@@ -510,48 +552,6 @@ cli_debug_command(const CliParsedResult *result)
 {
 	assert(0 && "Not implemented");
 	return EXIT_FAILURE;
-}
-
-static char *
-cli_read_file(const char *file_path)
-{
-	FILE *file = fopen(file_path, "r");
-
-	if (file == NULL)
-	{
-		cli_error("no file can be found at %s", file_path);
-		return NULL;
-	}
-
-	if (fseek(file, 0, SEEK_END) != 0)
-	{
-		goto error;
-	}
-
-	long size = ftell(file);
-
-	if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
-	{
-		goto error;
-	}
-
-	char *content = malloc((size_t) size + 1);
-
-	if (content == NULL)
-	{
-		goto error;
-	}
-
-	size_t read = fread(content, 1, (size_t) size, file);
-	fclose(file);
-	content[read] = '\0';
-
-	return content;
-
-	error:
-	fclose(file);
-	cli_error("failed to read the file at %s", file_path);
-	return NULL;
 }
 
 int
