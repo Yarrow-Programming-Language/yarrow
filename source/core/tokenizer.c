@@ -240,8 +240,27 @@ tokenizer_consume_digits(Tokenizer *tokenizer, bool (*is_digit)(char), bool requ
 	return true;
 }
 
+static bool
+tokenizer_is_escape_char(char character)
+{
+	switch (character)
+	{
+		case 'n':
+		case 't':
+		case 'r':
+		case '0':
+		case '\\':
+		case '\'':
+		case '"':
+			return true;
+
+		default:
+			return false;
+	}
+}
+
 static int
-tokenizer_number(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count)
+tokenizer_tokenize_number(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count)
 {
 	TokenKind kind = TOKEN_INTEGER;
 
@@ -340,6 +359,91 @@ tokenizer_number(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t 
 	return tokenizer_add_token(tokenizer, tokens, capacity, count, kind);
 }
 
+static int
+tokenizer_tokenize_string(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count)
+{
+	while (true)
+	{
+		char character = tokenizer_peek(tokenizer);
+
+		if (character == '\0')
+		{
+			tokenizer_error("unterminated string at %d:%d", tokenizer->start_line, tokenizer->start_column);
+			return EXIT_FAILURE;
+		}
+
+		if (character == '\\')
+		{
+			char escape = tokenizer_peek_next(tokenizer);
+
+			if (escape == '\0')
+			{
+				tokenizer_error("unterminated string at %d:%d", tokenizer->start_line, tokenizer->start_column);
+				return EXIT_FAILURE;
+			}
+
+			if (!tokenizer_is_escape_char(escape))
+			{
+				tokenizer_error("invalid escape sequence `\\%c` in string at %d:%d", escape, tokenizer->start_line, tokenizer->start_column);
+				return EXIT_FAILURE;
+			}
+
+			tokenizer_advance(tokenizer);
+			tokenizer_advance(tokenizer);
+			continue;
+		}
+
+		tokenizer_advance(tokenizer);
+
+		if (character == '"')
+		{
+			break;
+		}
+	}
+
+	return tokenizer_add_token(tokenizer, tokens, capacity, count, TOKEN_STRING);
+}
+
+static int
+tokenizer_tokenize_rune(Tokenizer *tokenizer, Token **tokens, size_t *capacity, size_t *count)
+{
+	char character = tokenizer_peek(tokenizer);
+
+	if (character == '\\')
+	{
+		char escape = tokenizer_peek_next(tokenizer);
+
+		if (escape == '\0')
+		{
+			tokenizer_error("unterminated rune at %d:%d", tokenizer->start_line, tokenizer->start_column);
+			return EXIT_FAILURE;
+		}
+
+		if (!tokenizer_is_escape_char(escape))
+		{
+			tokenizer_error("invalid escape sequence `\\%c` in rune at %d:%d", escape, tokenizer->start_line, tokenizer->start_column);
+			return EXIT_FAILURE;
+		}
+
+		tokenizer_advance(tokenizer);
+	}
+	else if (character == '\'' || character == '\0')
+	{
+		tokenizer_error("empty or unterminated rune at %d:%d", tokenizer->start_line, tokenizer->start_column);
+		return EXIT_FAILURE;
+	}
+
+	tokenizer_advance(tokenizer);
+
+	if (!tokenizer_match(tokenizer, '\''))
+	{
+		tokenizer_error("invalid rune literal at %d:%d", tokenizer->start_line, tokenizer->start_column);
+		return EXIT_FAILURE;
+	}
+
+	return tokenizer_add_token(tokenizer, tokens, capacity, count, TOKEN_RUNE);
+}
+
 
 int
 tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
@@ -402,7 +506,7 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 
 		if (tokenizer_is_digit(character))
 		{
-			if (tokenizer_number(&tokenizer, tokens, &capacity, count) != EXIT_SUCCESS)
+			if (tokenizer_tokenize_number(&tokenizer, tokens, &capacity, count) != EXIT_SUCCESS)
 			{
 				goto error;
 			}
@@ -620,9 +724,17 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 				break;
 
 			case '"':
+				if (tokenizer_tokenize_string(&tokenizer, tokens, &capacity, count) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
 				break;
 
 			case '\'':
+				if (tokenizer_tokenize_rune(&tokenizer, tokens, &capacity, count) != EXIT_SUCCESS)
+				{
+					goto error;
+				}
 				break;
 
 			default:
