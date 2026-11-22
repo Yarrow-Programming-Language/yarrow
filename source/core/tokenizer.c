@@ -21,6 +21,110 @@ tokenizer_error(const char *format, ...)
 }
 
 
+const char *
+tokenizer_kind_name(TokenKind kind)
+{
+	switch (kind)
+	{
+		case TOKEN_LEFT_PAREN: return "left_paren";
+		case TOKEN_RIGHT_PAREN: return "right_paren";
+		case TOKEN_LEFT_CURLY: return "left_curly";
+		case TOKEN_RIGHT_CURLY: return "right_curly";
+		case TOKEN_LEFT_SQUARE: return "left_square";
+		case TOKEN_RIGHT_SQUARE: return "right_square";
+		case TOKEN_PLUS: return "plus";
+		case TOKEN_MINUS: return "minus";
+		case TOKEN_ASTERISK: return "asterisk";
+		case TOKEN_SLASH: return "slash";
+		case TOKEN_SLASH_SLASH: return "slash_slash";
+		case TOKEN_PERCENT: return "percent";
+		case TOKEN_TILDE: return "tilde";
+		case TOKEN_CARET: return "caret";
+		case TOKEN_PIPE: return "pipe";
+		case TOKEN_DOT: return "dot";
+		case TOKEN_UNDERSCORE: return "underscore";
+		case TOKEN_BANG: return "bang";
+		case TOKEN_EQUAL: return "equal";
+		case TOKEN_EQUAL_EQUAL: return "equal_equal";
+		case TOKEN_NOT_EQUAL: return "not_equal";
+		case TOKEN_GREATER: return "greater";
+		case TOKEN_GREATER_EQUAL: return "greater_equal";
+		case TOKEN_LESS: return "less";
+		case TOKEN_LESS_EQUAL: return "less_equal";
+		case TOKEN_AND: return "and";
+		case TOKEN_OR: return "or";
+		case TOKEN_NOT: return "not";
+		case TOKEN_XOR: return "xor";
+		case TOKEN_LEFT_SHIFT: return "left_shift";
+		case TOKEN_RIGHT_SHIFT: return "right_shift";
+		case TOKEN_AT: return "at";
+		case TOKEN_IDENTIFIER: return "identifier";
+		case TOKEN_TYPE: return "type";
+		case TOKEN_STRING: return "string";
+		case TOKEN_RAW_STRING: return "raw_string";
+		case TOKEN_RUNE: return "rune";
+		case TOKEN_INTEGER: return "integer";
+		case TOKEN_BINARY_INTEGER: return "binary_integer";
+		case TOKEN_OCTAL_INTEGER: return "octal_integer";
+		case TOKEN_HEX_INTEGER: return "hex_integer";
+		case TOKEN_FLOAT: return "float";
+		case TOKEN_SCIENTIFIC_FLOAT: return "scientific_float";
+		case TOKEN_TRUE: return "true";
+		case TOKEN_FALSE: return "false";
+		case TOKEN_IF: return "if";
+		case TOKEN_ELSE: return "else";
+		case TOKEN_FOR: return "for";
+		case TOKEN_CONTINUE: return "continue";
+		case TOKEN_BREAK: return "break";
+		case TOKEN_MATCH: return "match";
+		case TOKEN_CASE: return "case";
+		case TOKEN_AS: return "as";
+		case TOKEN_UNWRAP: return "unwrap";
+		case TOKEN_TRY: return "try";
+		case TOKEN_HANDLE: return "handle";
+		case TOKEN_FUNCTION: return "function";
+		case TOKEN_RETURN: return "return";
+		case TOKEN_TYPEOF: return "typeof";
+		case TOKEN_SIZEOF: return "sizeof";
+		case TOKEN_CALL: return "call";
+		case TOKEN_DO: return "do";
+		case TOKEN_WITH: return "with";
+		case TOKEN_END: return "end";
+		case TOKEN_CONST: return "const";
+		case TOKEN_STATIC: return "static";
+		case TOKEN_MUTABLE: return "mutable";
+		case TOKEN_SET: return "set";
+		case TOKEN_UNSAFE: return "unsafe";
+		case TOKEN_PUBLIC: return "public";
+		case TOKEN_PRIVATE: return "private";
+		case TOKEN_ERROR: return "error";
+		case TOKEN_STRUCT: return "struct";
+		case TOKEN_IMPLEMENT: return "implement";
+		case TOKEN_ENUM: return "enum";
+		case TOKEN_UNION: return "union";
+		case TOKEN_REQUIRE: return "require";
+		case TOKEN_DEFER: return "defer";
+		case TOKEN_INC: return "inc";
+		case TOKEN_DEC: return "dec";
+		case TOKEN_POP: return "pop";
+		case TOKEN_DROP: return "drop";
+		case TOKEN_DUP: return "dup";
+		case TOKEN_ROT: return "rot";
+		case TOKEN_UNROT: return "unrot";
+		case TOKEN_SWAP: return "swap";
+		case TOKEN_BORROW: return "borrow";
+		case TOKEN_MUTABLE_BORROW: return "mutable_borrow";
+		case TOKEN_MOVE: return "move";
+		case TOKEN_LOAD: return "load";
+		case TOKEN_STORE: return "store";
+		case TOKEN_VOID: return "void";
+		case TOKEN_NULL: return "null";
+		case TOKEN_EOF: return "eof";
+	}
+
+	return "unknown";
+}
+
 static int
 tokenizer_grow_tokens(Token **tokens, size_t *capacity)
 {

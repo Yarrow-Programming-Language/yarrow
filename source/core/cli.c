@@ -572,7 +572,7 @@ cli_debug_tokens_command(const CliParsedResult *result)
 	for (size_t i = 0; i < token_count; i++)
 	{
 		Token *token = &tokens[i];
-		printf("%s:%d:%d kind=%d lexem='%.*s'\n", file_path, token->location.line, token->location.column, (int) token->kind, (int) token->length, token->lexeme);
+		printf("%s:%d:%d kind=%s lexem='%.*s'\n", file_path, token->location.line, token->location.column, tokenizer_kind_name(token->kind), (int) token->length, token->lexeme);
 	}
 
 	free(tokens);

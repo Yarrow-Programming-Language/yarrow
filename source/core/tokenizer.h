@@ -193,5 +193,6 @@ typedef struct {
 } Tokenizer;
 
 int tokenizer_tokenize(const char *source, Token **tokens, size_t *count);
+const char *tokenizer_kind_name(TokenKind kind);
 
 #endif
