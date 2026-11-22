@@ -858,6 +858,22 @@ parser_parse_word(Parser *parser, AstBody *body)
 			break;
 		}
 
+		case TOKEN_ELSE:
+			parser_error(token, "unexpected `else` in a body; `else` is only allowed after an `if` branch");
+			return EXIT_FAILURE;
+
+		case TOKEN_CASE:
+			parser_error(token, "unexpected `case` in a body; `case` is only allowed inside a `match`");
+			return EXIT_FAILURE;
+
+		case TOKEN_DO:
+			parser_error(token, "unexpected `do` in a body; `do` is only allowed after a function signature");
+			return EXIT_FAILURE;
+
+		case TOKEN_WITH:
+			parser_error(token, "unexpected `with` in a body; `with` is only allowed after a function `end` to declare its return type");
+			return EXIT_FAILURE;
+
 		case TOKEN_IDENTIFIER:
 		case TOKEN_TYPE:
 		case TOKEN_VOID:
