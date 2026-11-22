@@ -20,7 +20,6 @@ tokenizer_error(const char *format, ...)
 	va_end(args);
 }
 
-
 const char *
 tokenizer_kind_name(TokenKind kind)
 {
@@ -807,13 +806,6 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 						goto error;
 					}
 				}
-				else if (tokenizer_match(&tokenizer, '<'))
-				{
-					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LEFT_SHIFT) != EXIT_SUCCESS)
-					{
-						goto error;
-					}
-				}
 				else
 				{
 					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_LESS) != EXIT_SUCCESS)
@@ -827,13 +819,6 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 				if (tokenizer_match(&tokenizer, '='))
 				{
 					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_GREATER_EQUAL) != EXIT_SUCCESS)
-					{
-						goto error;
-					}
-				}
-				else if (tokenizer_match(&tokenizer, '>'))
-				{
-					if (tokenizer_add_token(&tokenizer, tokens, &capacity, count, TOKEN_RIGHT_SHIFT) != EXIT_SUCCESS)
 					{
 						goto error;
 					}

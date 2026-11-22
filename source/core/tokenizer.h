@@ -41,8 +41,8 @@ typedef enum {
 	TOKEN_OR,                  // or
 	TOKEN_NOT,                 // not
 	TOKEN_XOR,                 // xor
-	TOKEN_LEFT_SHIFT,          // <<  left_shift
-	TOKEN_RIGHT_SHIFT,         // >>  right_shift
+	TOKEN_LEFT_SHIFT,          // left_shift
+	TOKEN_RIGHT_SHIFT,         // right_shift
 	TOKEN_AT,                  // For builtin (e.g @write, @)
 	TOKEN_IDENTIFIER,          // For any word not in there
 	TOKEN_TYPE,                // For type themselfs (e.g i32, f16, string, rune, even i3 or u5)
@@ -119,6 +119,8 @@ static const TokenizerKeyword tokenizer_keywords[] = {
 	{ "or", TOKEN_OR },
 	{ "not", TOKEN_NOT },
 	{ "xor", TOKEN_XOR },
+	{ "left_shift", TOKEN_LEFT_SHIFT },
+	{ "right_shift", TOKEN_RIGHT_SHIFT },
 	{ "true", TOKEN_TRUE },
 	{ "false", TOKEN_FALSE },
 	{ "if", TOKEN_IF },
