@@ -170,7 +170,16 @@ static const TokenizerKeyword tokenizer_keywords[] = {
 	{ "load", TOKEN_LOAD },
 	{ "store", TOKEN_STORE },
 	{ "void", TOKEN_VOID },
-	{ "null", TOKEN_NULL }
+	{ "null", TOKEN_NULL },
+	{ "string", TOKEN_TYPE },
+	{ "rune", TOKEN_TYPE },
+	{ "bool", TOKEN_TYPE },
+	{ "array", TOKEN_TYPE },
+	{ "hashmap", TOKEN_TYPE },
+	{ "reference", TOKEN_TYPE },
+	{ "mutable_reference", TOKEN_TYPE },
+	{ "pointer", TOKEN_TYPE },
+	{ "const_pointer", TOKEN_TYPE }
 };
 
 typedef struct {

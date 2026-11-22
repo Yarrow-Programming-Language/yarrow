@@ -304,6 +304,39 @@ tokenizer_keyword_kind(const char *lexeme, size_t length, TokenKind *kind)
 }
 
 static bool
+tokenizer_is_dynamic_type(const char *lexeme, size_t length)
+{
+	if (length < 2)
+	{
+		return false;
+	}
+
+	char prefix = tokenizer_lowercase(lexeme[0]);
+
+	if (prefix != 'i' && prefix != 'u' && prefix != 'f')
+	{
+		return false;
+	}
+
+	// The size follows the number tokenizer rules: a non empty digit
+	// sequence with digit separators, no leading or trailing separator.
+	if (!tokenizer_is_digit(lexeme[1]) || !tokenizer_is_digit(lexeme[length - 1]))
+	{
+		return false;
+	}
+
+	for (size_t i = 2; i < length - 1; i++)
+	{
+		if (lexeme[i] != '_' && !tokenizer_is_digit(lexeme[i]))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool
 tokenizer_consume_digits(Tokenizer *tokenizer, bool (*is_digit)(char), bool require_digit)
 {
 	bool seen_digit = !require_digit;
@@ -616,6 +649,10 @@ tokenizer_tokenize(const char *source, Token **tokens, size_t *count)
 				if (tokenizer_keyword_kind(tokenizer.start, length, &keyword_kind))
 				{
 					kind = keyword_kind;
+				}
+				else if (tokenizer_is_dynamic_type(tokenizer.start, length))
+				{
+					kind = TOKEN_TYPE;
 				}
 			}
 
