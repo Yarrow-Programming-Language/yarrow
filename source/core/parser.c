@@ -17,24 +17,59 @@ static void parser_free_type(AstType *type);
 static ParserTypeStatus parser_parse_type(Parser *parser, AstType **type);
 
 static void
-parser_error(const Parser *parser, const Token *token, const char *format, ...)
+parser_record_diagnostic(Parser *parser, const Token *token, char *message)
+{
+	ParserDiagnostics *diagnostics = &parser->diagnostics;
+
+	if (diagnostics->count >= diagnostics->capacity)
+	{
+		size_t new_capacity = diagnostics->capacity == 0 ? 8 : diagnostics->capacity * 2;
+		ParserDiagnostic *grow = realloc(diagnostics->items, new_capacity * sizeof(ParserDiagnostic));
+
+		if (grow == NULL)
+		{
+			free(message);
+			return;
+		}
+
+		diagnostics->items = grow;
+		diagnostics->capacity = new_capacity;
+	}
+
+	diagnostics->items[diagnostics->count] = (ParserDiagnostic) {
+		.file_name = parser->file_name,
+		.location = token->location,
+		.message = message
+	};
+	diagnostics->count++;
+}
+
+static void
+parser_error(Parser *parser, const Token *token, const char *format, ...)
 {
 	va_list args;
 
-	fprintf(stderr, "ERROR: ");
-
 	va_start(args, format);
-	vfprintf(stderr, format, args);
+	int length = vsnprintf(NULL, 0, format, args);
 	va_end(args);
 
-	if (parser != NULL && parser->file_name != NULL)
+	if (length < 0)
 	{
-		fprintf(stderr, " at %s:%d:%d\n", parser->file_name, token->location.line, token->location.column);
+		return;
 	}
-	else
+
+	char *message = malloc((size_t) length + 1);
+
+	if (message == NULL)
 	{
-		fprintf(stderr, " at %d:%d\n", token->location.line, token->location.column);
+		return;
 	}
+
+	va_start(args, format);
+	vsnprintf(message, (size_t) length + 1, format, args);
+	va_end(args);
+
+	parser_record_diagnostic(parser, token, message);
 }
 
 static const Token *
@@ -165,7 +200,7 @@ parser_is_value_literal(TokenKind kind)
 }
 
 static AstNode *
-parser_new_node(const Parser *parser, const Token *token, AstKind kind)
+parser_new_node(Parser *parser, const Token *token, AstKind kind)
 {
 	AstNode *node = calloc(1, sizeof(AstNode));
 
@@ -235,9 +270,6 @@ parser_previous_location(const Parser *parser)
 	return parser->tokens[parser->current - 1].location;
 }
 
-// Completes a node with the location of the last consumed token, then adds
-// it to its body. Every node is pushed right after its final token, so the
-// previous token location is the node end location.
 static int
 parser_push_node(const Parser *parser, AstBody *body, AstNode *node)
 {
@@ -298,7 +330,7 @@ parser_free_type(AstType *type)
 }
 
 static AstType *
-parser_new_type(const Parser *parser, const Token *token, AstTypeKind kind)
+parser_new_type(Parser *parser, const Token *token, AstTypeKind kind)
 {
 	AstType *type = calloc(1, sizeof(AstType));
 
@@ -1837,6 +1869,113 @@ parser_parse_declaration(Parser *parser, AstBody *program)
 	return parser_parse_named_declaration(parser, program);
 }
 
+static bool
+parser_is_declaration_keyword(TokenKind kind)
+{
+	switch (kind)
+	{
+		case TOKEN_FUNCTION:
+		case TOKEN_STRUCT:
+		case TOKEN_ENUM:
+		case TOKEN_UNION:
+		case TOKEN_ERROR:
+		case TOKEN_IMPLEMENT:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+static bool
+parser_is_declaration_ahead(const Parser *parser)
+{
+	size_t index = parser->current;
+
+	if (index >= parser->count)
+	{
+		return false;
+	}
+
+	TokenKind kind = parser->tokens[index].kind;
+
+	if (kind != TOKEN_IDENTIFIER && kind != TOKEN_ERROR)
+	{
+		return false;
+	}
+
+	index++;
+
+	while (index < parser->count
+		&& (parser->tokens[index].kind == TOKEN_PUBLIC || parser->tokens[index].kind == TOKEN_PRIVATE || parser->tokens[index].kind == TOKEN_UNSAFE))
+	{
+		index++;
+	}
+
+	if (index < parser->count
+		&& parser_is_type_start(parser->tokens[index].kind)
+		&& index + 1 < parser->count
+		&& parser_is_declaration_keyword(parser->tokens[index + 1].kind))
+	{
+		index++;
+	}
+
+	return index < parser->count && parser_is_declaration_keyword(parser->tokens[index].kind);
+}
+
+static bool
+parser_is_block_boundary(TokenKind kind)
+{
+	return kind == TOKEN_END || kind == TOKEN_ELSE || kind == TOKEN_CASE || kind == TOKEN_DO;
+}
+
+static bool
+parser_is_require_ahead(const Parser *parser)
+{
+	if (parser->current >= parser->count || parser->tokens[parser->current].kind != TOKEN_STRING)
+	{
+		return false;
+	}
+
+	size_t index = parser->current + 1;
+
+	if (index < parser->count && (parser->tokens[index].kind == TOKEN_IDENTIFIER || parser->tokens[index].kind == TOKEN_ERROR))
+	{
+		index++;
+	}
+
+	return index < parser->count && parser->tokens[index].kind == TOKEN_REQUIRE;
+}
+
+static void
+parser_synchronize(Parser *parser)
+{
+	while (!parser_check(parser, TOKEN_EOF))
+	{
+		TokenKind kind = parser_peek(parser)->kind;
+
+		if (kind == TOKEN_END || kind == TOKEN_ELSE || kind == TOKEN_CASE || kind == TOKEN_DO)
+		{
+			// An error inside a block leaves the boundaries of the
+			// enclosing constructs dangling, so consume them all.
+			do
+			{
+				parser_advance(parser);
+			}
+			while (parser_is_block_boundary(parser_peek(parser)->kind));
+
+			return;
+		}
+
+		if (parser_is_require_ahead(parser) || parser_is_declaration_ahead(parser))
+		{
+			return;
+		}
+
+		parser_advance(parser);
+	}
+}
+
 static void
 parser_free_body(AstBody *body)
 {
@@ -2299,9 +2438,69 @@ parser_print(const AstBody *program)
 	parser_print_body(program, 0);
 }
 
+void
+parser_free_diagnostics(ParserDiagnostics *diagnostics)
+{
+	if (diagnostics == NULL)
+	{
+		return;
+	}
 
-int
-parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program)
+	for (size_t i = 0; i < diagnostics->count; i++)
+	{
+		free(diagnostics->items[i].message);
+	}
+
+	free(diagnostics->items);
+	diagnostics->items = NULL;
+	diagnostics->count = 0;
+	diagnostics->capacity = 0;
+}
+
+void
+parser_print_diagnostics(const ParserDiagnostics *diagnostics)
+{
+	if (diagnostics == NULL)
+	{
+		return;
+	}
+
+	for (size_t i = 0; i < diagnostics->count; i++)
+	{
+		const ParserDiagnostic *diagnostic = &diagnostics->items[i];
+
+		if (diagnostic->file_name != NULL)
+		{
+			fprintf(stderr, "ERROR: %s at %s:%d:%d\n", diagnostic->message, diagnostic->file_name, diagnostic->location.line, diagnostic->location.column);
+		}
+		else
+		{
+			fprintf(stderr, "ERROR: %s at %d:%d\n", diagnostic->message, diagnostic->location.line, diagnostic->location.column);
+		}
+	}
+}
+
+static void
+parser_move_diagnostics(Parser *parser, ParserDiagnostics *out)
+{
+	if (out != NULL)
+	{
+		out->items = parser->diagnostics.items;
+		out->count = parser->diagnostics.count;
+		out->capacity = parser->diagnostics.capacity;
+	}
+	else
+	{
+		parser_free_diagnostics(&parser->diagnostics);
+	}
+
+	parser->diagnostics.items = NULL;
+	parser->diagnostics.count = 0;
+	parser->diagnostics.capacity = 0;
+}
+
+static int
+parser_parse_internal(const Token *tokens, size_t count, const char *file_name, bool recover, AstBody *program, ParserDiagnostics *diagnostics)
 {
 	if (tokens == NULL || count == 0 || program == NULL)
 	{
@@ -2312,7 +2511,8 @@ parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *
 		.tokens = tokens,
 		.count = count,
 		.current = 0,
-		.file_name = file_name
+		.file_name = file_name,
+		.recover = recover
 	};
 
 	program->items = NULL;
@@ -2323,10 +2523,33 @@ parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *
 	{
 		if (parser_parse_declaration(&parser, program) != EXIT_SUCCESS)
 		{
-			parser_free(program);
-			return EXIT_FAILURE;
+			if (!recover)
+			{
+				parser_free(program);
+				parser_move_diagnostics(&parser, diagnostics);
+				return EXIT_FAILURE;
+			}
+
+			parser_synchronize(&parser);
 		}
 	}
 
-	return EXIT_SUCCESS;
+	size_t diagnostic_count = parser.diagnostics.count;
+
+	parser_move_diagnostics(&parser, diagnostics);
+
+	return diagnostic_count == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int
+parser_parse_recovering(const Token *tokens, size_t count, const char *file_name, AstBody *program, ParserDiagnostics *diagnostics)
+{
+	return parser_parse_internal(tokens, count, file_name, true, program, diagnostics);
+}
+
+
+int
+parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program, ParserDiagnostics *diagnostics)
+{
+	return parser_parse_internal(tokens, count, file_name, false, program, diagnostics);
 }

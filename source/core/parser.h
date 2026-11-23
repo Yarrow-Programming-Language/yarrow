@@ -18,6 +18,18 @@ typedef struct {
 } AstBody;
 
 typedef struct {
+	const char *file_name;
+	TokenLocation location;
+	char *message;
+} ParserDiagnostic;
+
+typedef struct {
+	ParserDiagnostic *items;
+	size_t count;
+	size_t capacity;
+} ParserDiagnostics;
+
+typedef struct {
 	const Token *first;
 	size_t count;
 } AstSpan;
@@ -151,11 +163,16 @@ typedef struct {
 	size_t count;
 	size_t current;
 	const char *file_name;
+	bool recover;
+	ParserDiagnostics diagnostics;
 } Parser;
 
 void parser_free(AstBody *program);
 void parser_print(const AstBody *program);
+void parser_free_diagnostics(ParserDiagnostics *diagnostics);
+void parser_print_diagnostics(const ParserDiagnostics *diagnostics);
+int parser_parse_recovering(const Token *tokens, size_t count, const char *file_name, AstBody *program, ParserDiagnostics *diagnostics);
 
-int parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program);
+int parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program, ParserDiagnostics *diagnostics);
 
 #endif
