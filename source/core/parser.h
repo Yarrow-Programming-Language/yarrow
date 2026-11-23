@@ -111,7 +111,8 @@ typedef enum {
 
 struct ast_node {
 	AstKind kind;
-	TokenLocation location;
+	TokenLocation start;
+	TokenLocation end;
 	union {
 		struct { Token path; AstName scope; bool has_scope; } require;
 		struct { AstName name; bool is_public; bool is_unsafe; AstBody params; AstBody body; AstType *result; bool has_result; } function;
@@ -149,11 +150,12 @@ typedef struct {
 	const Token *tokens;
 	size_t count;
 	size_t current;
+	const char *file_name;
 } Parser;
 
 void parser_free(AstBody *program);
 void parser_print(const AstBody *program);
 
-int parser_parse(const Token *tokens, size_t count, AstBody *program);
+int parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program);
 
 #endif

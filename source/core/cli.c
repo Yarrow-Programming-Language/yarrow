@@ -578,7 +578,7 @@ cli_debug_ast_command(const CliParsedResult *result)
 
 	AstBody program;
 
-	if (parser_parse(tokens, token_count, &program) != EXIT_SUCCESS)
+	if (parser_parse(tokens, token_count, file_path, &program) != EXIT_SUCCESS)
 	{
 		parser_free(&program);
 		tokenizer_free(&tokens);

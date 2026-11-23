@@ -17,7 +17,7 @@ static void parser_free_type(AstType *type);
 static ParserTypeStatus parser_parse_type(Parser *parser, AstType **type);
 
 static void
-parser_error(const Token *token, const char *format, ...)
+parser_error(const Parser *parser, const Token *token, const char *format, ...)
 {
 	va_list args;
 
@@ -27,7 +27,14 @@ parser_error(const Token *token, const char *format, ...)
 	vfprintf(stderr, format, args);
 	va_end(args);
 
-	fprintf(stderr, " at %d:%d\n", token->location.line, token->location.column);
+	if (parser != NULL && parser->file_name != NULL)
+	{
+		fprintf(stderr, " at %s:%d:%d\n", parser->file_name, token->location.line, token->location.column);
+	}
+	else
+	{
+		fprintf(stderr, " at %d:%d\n", token->location.line, token->location.column);
+	}
 }
 
 static const Token *
@@ -83,7 +90,7 @@ parser_expect(Parser *parser, TokenKind kind, const char *what)
 
 	if (token->kind != kind)
 	{
-		parser_error(token, "expected %s but found `%.*s`", what, (int) token->length, token->lexeme);
+		parser_error(parser, token, "expected %s but found `%.*s`", what, (int) token->length, token->lexeme);
 		return NULL;
 	}
 
@@ -158,18 +165,19 @@ parser_is_value_literal(TokenKind kind)
 }
 
 static AstNode *
-parser_new_node(const Token *token, AstKind kind)
+parser_new_node(const Parser *parser, const Token *token, AstKind kind)
 {
 	AstNode *node = calloc(1, sizeof(AstNode));
 
 	if (node == NULL)
 	{
-		parser_error(token, "failed to allocate memory for the AST node");
+		parser_error(parser, token, "failed to allocate memory for the AST node");
 		return NULL;
 	}
 
 	node->kind = kind;
-	node->location = token->location;
+	node->start = token->location;
+	node->end = token->location;
 	return node;
 }
 
@@ -227,6 +235,16 @@ parser_previous_location(const Parser *parser)
 	return parser->tokens[parser->current - 1].location;
 }
 
+// Completes a node with the location of the last consumed token, then adds
+// it to its body. Every node is pushed right after its final token, so the
+// previous token location is the node end location.
+static int
+parser_push_node(const Parser *parser, AstBody *body, AstNode *node)
+{
+	node->end = parser_previous_location(parser);
+	return parser_ast_body_push(body, node);
+}
+
 static void
 parser_free_type_members(AstTypeMembers *members)
 {
@@ -280,13 +298,13 @@ parser_free_type(AstType *type)
 }
 
 static AstType *
-parser_new_type(const Token *token, AstTypeKind kind)
+parser_new_type(const Parser *parser, const Token *token, AstTypeKind kind)
 {
 	AstType *type = calloc(1, sizeof(AstType));
 
 	if (type == NULL)
 	{
-		parser_error(token, "failed to allocate memory for the type node");
+		parser_error(parser, token, "failed to allocate memory for the type node");
 		return NULL;
 	}
 
@@ -372,7 +390,7 @@ parser_parse_union_type(Parser *parser, AstType **out)
 
 	parser_advance(parser);
 
-	AstType *type = parser_new_type(first, AST_TYPE_UNION);
+	AstType *type = parser_new_type(parser, first, AST_TYPE_UNION);
 
 	if (type == NULL)
 	{
@@ -389,11 +407,11 @@ parser_parse_union_type(Parser *parser, AstType **out)
 
 		if (parser_is_type_start(parser_peek(parser)->kind))
 		{
-			parser_error(close, "union types cannot nest");
+			parser_error(parser, close, "union types cannot nest");
 		}
 		else
 		{
-			parser_error(close, "a union type cannot be empty");
+			parser_error(parser, close, "a union type cannot be empty");
 		}
 
 		parser_free_type(type);
@@ -428,7 +446,7 @@ parser_parse_union_type(Parser *parser, AstType **out)
 			{
 				if (status == PARSER_TYPE_ABSENT)
 				{
-					parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+					parser_error(parser, token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
 				}
 
 				parser_free_type(type);
@@ -443,7 +461,7 @@ parser_parse_union_type(Parser *parser, AstType **out)
 
 		if (!parser_type_members_push(&type->as.union_type.members, &member))
 		{
-			parser_error(token, "failed to allocate memory for the union members");
+			parser_error(parser, token, "failed to allocate memory for the union members");
 			parser_free_type(type);
 			return PARSER_TYPE_INVALID;
 		}
@@ -465,7 +483,7 @@ parser_parse_struct_type(Parser *parser, AstType **out)
 
 	parser_advance(parser);
 
-	AstType *type = parser_new_type(first, AST_TYPE_STRUCT);
+	AstType *type = parser_new_type(parser, first, AST_TYPE_STRUCT);
 
 	if (type == NULL)
 	{
@@ -489,7 +507,7 @@ parser_parse_struct_type(Parser *parser, AstType **out)
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+				parser_error(parser, token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
 			}
 
 			parser_free_type(type);
@@ -507,7 +525,7 @@ parser_parse_struct_type(Parser *parser, AstType **out)
 
 		if (field_name->kind != TOKEN_IDENTIFIER)
 		{
-			parser_error(field_name, "expected a field name after the field type");
+			parser_error(parser, field_name, "expected a field name after the field type");
 			parser_free_type(field_type);
 			parser_free_type(type);
 			return PARSER_TYPE_INVALID;
@@ -520,7 +538,7 @@ parser_parse_struct_type(Parser *parser, AstType **out)
 
 		if (!parser_type_fields_push(&type->as.struct_type.fields, &field))
 		{
-			parser_error(token, "failed to allocate memory for the struct fields");
+			parser_error(parser, token, "failed to allocate memory for the struct fields");
 			parser_free_type(field_type);
 			parser_free_type(type);
 			return PARSER_TYPE_INVALID;
@@ -565,7 +583,7 @@ parser_parse_type(Parser *parser, AstType **out)
 		return PARSER_TYPE_ABSENT;
 	}
 
-	AstType *base = parser_new_type(first, AST_TYPE_BASE);
+	AstType *base = parser_new_type(parser, first, AST_TYPE_BASE);
 
 	if (base == NULL)
 	{
@@ -583,7 +601,7 @@ parser_parse_type(Parser *parser, AstType **out)
 
 	parser_advance(parser);
 
-	AstType *type = parser_new_type(first, AST_TYPE_GENERIC);
+	AstType *type = parser_new_type(parser, first, AST_TYPE_GENERIC);
 
 	if (type == NULL)
 	{
@@ -629,7 +647,7 @@ parser_parse_type(Parser *parser, AstType **out)
 			{
 				if (status == PARSER_TYPE_ABSENT)
 				{
-					parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+					parser_error(parser, token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
 				}
 
 				parser_free_type(type);
@@ -644,7 +662,7 @@ parser_parse_type(Parser *parser, AstType **out)
 
 		if (!parser_type_members_push(&type->as.generic.arguments, &member))
 		{
-			parser_error(token, "failed to allocate memory for the type arguments");
+			parser_error(parser, token, "failed to allocate memory for the type arguments");
 			parser_free_type(type);
 			return PARSER_TYPE_INVALID;
 		}
@@ -652,7 +670,7 @@ parser_parse_type(Parser *parser, AstType **out)
 
 	if (type->as.generic.arguments.count == 0)
 	{
-		parser_error(parser_peek(parser), "a generic type needs at least one argument");
+		parser_error(parser, parser_peek(parser), "a generic type needs at least one argument");
 		parser_free_type(type);
 		return PARSER_TYPE_INVALID;
 	}
@@ -717,7 +735,7 @@ parser_parse_simple(Parser *parser, AstBody *body)
 	const Token *token = parser_peek(parser);
 	bool is_literal = parser_is_literal(token->kind);
 
-	AstNode *node = parser_new_node(token, is_literal ? AST_LITERAL : AST_WORD);
+	AstNode *node = parser_new_node(parser, token, is_literal ? AST_LITERAL : AST_WORD);
 
 	if (node == NULL)
 	{
@@ -735,7 +753,7 @@ parser_parse_simple(Parser *parser, AstBody *body)
 
 	parser_advance(parser);
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -751,7 +769,7 @@ parser_parse_container_literal(Parser *parser, AstBody *body, AstKind kind, Toke
 
 	parser_advance(parser);
 
-	AstNode *node = parser_new_node(token, kind);
+	AstNode *node = parser_new_node(parser, token, kind);
 
 	if (node == NULL)
 	{
@@ -770,7 +788,7 @@ parser_parse_container_literal(Parser *parser, AstBody *body, AstKind kind, Toke
 		goto error;
 	}
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -793,7 +811,7 @@ parser_parse_require(Parser *parser, AstBody *body)
 		return EXIT_FAILURE;
 	}
 
-	AstNode *node = parser_new_node(token, AST_DECL_REQUIRE);
+	AstNode *node = parser_new_node(parser, token, AST_DECL_REQUIRE);
 
 	if (node == NULL)
 	{
@@ -815,7 +833,7 @@ parser_parse_require(Parser *parser, AstBody *body)
 		return EXIT_FAILURE;
 	}
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -831,7 +849,7 @@ parser_parse_if(Parser *parser, AstBody *body)
 
 	parser_advance(parser);
 
-	AstNode *node = parser_new_node(token, AST_IF);
+	AstNode *node = parser_new_node(parser, token, AST_IF);
 
 	if (node == NULL)
 	{
@@ -862,7 +880,7 @@ parser_parse_if(Parser *parser, AstBody *body)
 		goto error;
 	}
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -897,7 +915,7 @@ parser_parse_block(Parser *parser, AstBody *body, TokenKind kind)
 
 	parser_advance(parser);
 
-	AstNode *node = parser_new_node(token, node_kind);
+	AstNode *node = parser_new_node(parser, token, node_kind);
 
 	if (node == NULL)
 	{
@@ -916,7 +934,7 @@ parser_parse_block(Parser *parser, AstBody *body, TokenKind kind)
 		goto error;
 	}
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -935,7 +953,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 
 	parser_advance(parser);
 
-	AstNode *node = parser_new_node(token, AST_MATCH);
+	AstNode *node = parser_new_node(parser, token, AST_MATCH);
 
 	if (node == NULL)
 	{
@@ -945,7 +963,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 	while (!parser_check(parser, TOKEN_END) && !parser_check(parser, TOKEN_ELSE) && !parser_check(parser, TOKEN_EOF))
 	{
 		const Token *case_token = parser_peek(parser);
-		AstNode *case_node = parser_new_node(case_token, AST_CASE);
+		AstNode *case_node = parser_new_node(parser, case_token, AST_CASE);
 
 		if (case_node == NULL)
 		{
@@ -1010,7 +1028,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 			goto error;
 		}
 
-		if (parser_ast_body_push(&node->as.match.cases, case_node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, &node->as.match.cases, case_node) != EXIT_SUCCESS)
 		{
 			parser_free_node(case_node);
 			goto error;
@@ -1040,7 +1058,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 		goto error;
 	}
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1076,7 +1094,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 	{
 		parser_advance(parser);
 
-		AstNode *node = parser_new_node(token, AST_AS);
+		AstNode *node = parser_new_node(parser, token, AST_AS);
 
 		if (node == NULL)
 		{
@@ -1086,7 +1104,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		node->as.as_cast.type = type;
 
-		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1122,13 +1140,13 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(type_token, "expected a type after `%.*s`", (int) mutability->length, mutability->lexeme);
+				parser_error(parser, type_token, "expected a type after `%.*s`", (int) mutability->length, mutability->lexeme);
 			}
 
 			return EXIT_FAILURE;
 		}
 
-		AstNode *node = parser_new_node(token, AST_VARIABLE);
+		AstNode *node = parser_new_node(parser, token, AST_VARIABLE);
 
 		if (node == NULL)
 		{
@@ -1140,7 +1158,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		node->as.variable.mutability = *mutability;
 		node->as.variable.type = variable_type;
 
-		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1154,7 +1172,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 	{
 		parser_advance(parser);
 
-		AstNode *node = parser_new_node(token, AST_SET);
+		AstNode *node = parser_new_node(parser, token, AST_SET);
 
 		if (node == NULL)
 		{
@@ -1163,7 +1181,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		node->as.set.name = name;
 
-		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1183,7 +1201,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		{
 			parser_advance(parser);
 
-			node = parser_new_node(token, AST_HANDLE);
+			node = parser_new_node(parser, token, AST_HANDLE);
 
 			if (node == NULL)
 			{
@@ -1203,7 +1221,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		}
 		else
 		{
-			node = parser_new_node(token, AST_CALL);
+			node = parser_new_node(parser, token, AST_CALL);
 
 			if (node == NULL)
 			{
@@ -1213,7 +1231,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 			node->as.call.name = name;
 		}
 
-		if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1223,7 +1241,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 	}
 
 	// Plain word, possibly qualified like io.write_line
-	AstNode *node = parser_new_node(token, AST_WORD);
+	AstNode *node = parser_new_node(parser, token, AST_WORD);
 
 	if (node == NULL)
 	{
@@ -1232,7 +1250,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 	node->as.word.name = name;
 
-	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, body, node) != EXIT_SUCCESS)
 	{
 		parser_free_node(node);
 		return EXIT_FAILURE;
@@ -1275,23 +1293,23 @@ parser_parse_word(Parser *parser, AstBody *body)
 		}
 
 		case TOKEN_ELSE:
-			parser_error(token, "unexpected `else` in a body; `else` is only allowed after an `if` branch");
+			parser_error(parser, token, "unexpected `else` in a body; `else` is only allowed after an `if` branch");
 			return EXIT_FAILURE;
 
 		case TOKEN_CASE:
-			parser_error(token, "unexpected `case` in a body; `case` is only allowed inside a `match`");
+			parser_error(parser, token, "unexpected `case` in a body; `case` is only allowed inside a `match`");
 			return EXIT_FAILURE;
 
 		case TOKEN_DO:
-			parser_error(token, "unexpected `do` in a body; `do` is only allowed after a function signature");
+			parser_error(parser, token, "unexpected `do` in a body; `do` is only allowed after a function signature");
 			return EXIT_FAILURE;
 
 		case TOKEN_WITH:
-			parser_error(token, "unexpected `with` in a body; `with` is only allowed after a function `end` to declare its return type");
+			parser_error(parser, token, "unexpected `with` in a body; `with` is only allowed after a function `end` to declare its return type");
 			return EXIT_FAILURE;
 
 		case TOKEN_PIPE:
-			parser_error(token, "unexpected `|` in a body; `|` is only used in union types and unions cannot nest");
+			parser_error(parser, token, "unexpected `|` in a body; `|` is only used in union types and unions cannot nest");
 			return EXIT_FAILURE;
 
 		case TOKEN_LEFT_PAREN:
@@ -1338,7 +1356,7 @@ parser_parse_body(Parser *parser, AstBody *body, const TokenKind *stops, size_t 
 	{
 		if (parser_check(parser, TOKEN_EOF))
 		{
-			parser_error(parser_peek(parser), "unexpected end of file");
+			parser_error(parser, parser_peek(parser), "unexpected end of file");
 			return EXIT_FAILURE;
 		}
 
@@ -1354,7 +1372,7 @@ parser_parse_body(Parser *parser, AstBody *body, const TokenKind *stops, size_t 
 static int
 parser_parse_function(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public, bool is_unsafe)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_FUNCTION);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_FUNCTION);
 
 	if (node == NULL)
 	{
@@ -1375,13 +1393,13 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(param_token, "expected a parameter type but found `%.*s`", (int) param_token->length, param_token->lexeme);
+				parser_error(parser, param_token, "expected a parameter type but found `%.*s`", (int) param_token->length, param_token->lexeme);
 			}
 
 			goto error;
 		}
 
-		AstNode *param = parser_new_node(param_token, AST_PARAM);
+		AstNode *param = parser_new_node(parser, param_token, AST_PARAM);
 
 		if (param == NULL)
 		{
@@ -1391,7 +1409,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 
 		param->as.param.type = type;
 
-		if (parser_ast_body_push(&node->as.function.params, param) != EXIT_SUCCESS)
+		if (parser_push_node(parser, &node->as.function.params, param) != EXIT_SUCCESS)
 		{
 			parser_free_node(param);
 			goto error;
@@ -1424,7 +1442,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(result_token, "expected a return type after `with`");
+				parser_error(parser, result_token, "expected a return type after `with`");
 			}
 
 			goto error;
@@ -1433,7 +1451,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 		node->as.function.has_result = true;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1448,7 +1466,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 static int
 parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_STRUCT);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_STRUCT);
 
 	if (node == NULL)
 	{
@@ -1468,7 +1486,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(field_token, "expected a field type but found `%.*s`", (int) field_token->length, field_token->lexeme);
+				parser_error(parser, field_token, "expected a field type but found `%.*s`", (int) field_token->length, field_token->lexeme);
 			}
 
 			goto error;
@@ -1490,7 +1508,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 			parser_advance(parser);
 		}
 
-		AstNode *field = parser_new_node(field_token, AST_FIELD);
+		AstNode *field = parser_new_node(parser, field_token, AST_FIELD);
 
 		if (field == NULL)
 		{
@@ -1502,7 +1520,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 		field->as.field.name = (AstName) { .first = field_name, .count = 1 };
 		field->as.field.is_public = field_public;
 
-		if (parser_ast_body_push(&node->as.struct_decl.fields, field) != EXIT_SUCCESS)
+		if (parser_push_node(parser, &node->as.struct_decl.fields, field) != EXIT_SUCCESS)
 		{
 			parser_free_node(field);
 			goto error;
@@ -1514,7 +1532,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 		goto error;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1536,11 +1554,11 @@ parser_parse_members(Parser *parser, AstBody *members)
 
 		if (!parser_parse_name(parser, &name))
 		{
-			parser_error(member_token, "expected a member name but found `%.*s`", (int) member_token->length, member_token->lexeme);
+			parser_error(parser, member_token, "expected a member name but found `%.*s`", (int) member_token->length, member_token->lexeme);
 			return EXIT_FAILURE;
 		}
 
-		AstNode *node = parser_new_node(member_token, AST_ENUM_MEMBER);
+		AstNode *node = parser_new_node(parser, member_token, AST_ENUM_MEMBER);
 
 		if (node == NULL)
 		{
@@ -1556,7 +1574,7 @@ parser_parse_members(Parser *parser, AstBody *members)
 			parser_advance(parser);
 		}
 
-		if (parser_ast_body_push(members, node) != EXIT_SUCCESS)
+		if (parser_push_node(parser, members, node) != EXIT_SUCCESS)
 		{
 			parser_free_node(node);
 			return EXIT_FAILURE;
@@ -1569,7 +1587,7 @@ parser_parse_members(Parser *parser, AstBody *members)
 static int
 parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public, AstType *carrier, bool has_carrier)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_ENUM);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_ENUM);
 
 	if (node == NULL)
 	{
@@ -1586,7 +1604,7 @@ parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, Ast
 		goto error;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1601,7 +1619,7 @@ parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, Ast
 static int
 parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_UNION);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_UNION);
 
 	if (node == NULL)
 	{
@@ -1621,13 +1639,13 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 		{
 			if (status == PARSER_TYPE_ABSENT)
 			{
-				parser_error(member_token, "expected a member type but found `%.*s`", (int) member_token->length, member_token->lexeme);
+				parser_error(parser, member_token, "expected a member type but found `%.*s`", (int) member_token->length, member_token->lexeme);
 			}
 
 			goto error;
 		}
 
-		AstNode *member = parser_new_node(member_token, AST_UNION_MEMBER);
+		AstNode *member = parser_new_node(parser, member_token, AST_UNION_MEMBER);
 
 		if (member == NULL)
 		{
@@ -1637,7 +1655,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 
 		member->as.union_member.type = type;
 
-		if (parser_ast_body_push(&node->as.union_decl.members, member) != EXIT_SUCCESS)
+		if (parser_push_node(parser, &node->as.union_decl.members, member) != EXIT_SUCCESS)
 		{
 			parser_free_node(member);
 			goto error;
@@ -1649,7 +1667,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 		goto error;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1664,7 +1682,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 static int
 parser_parse_error_decl(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_ERROR);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_ERROR);
 
 	if (node == NULL)
 	{
@@ -1679,7 +1697,7 @@ parser_parse_error_decl(Parser *parser, AstBody *program, const Token *name_toke
 		goto error;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1694,7 +1712,7 @@ parser_parse_error_decl(Parser *parser, AstBody *program, const Token *name_toke
 static int
 parser_parse_implement(Parser *parser, AstBody *program, const Token *name_token, AstName name)
 {
-	AstNode *node = parser_new_node(name_token, AST_DECL_IMPLEMENT);
+	AstNode *node = parser_new_node(parser, name_token, AST_DECL_IMPLEMENT);
 
 	if (node == NULL)
 	{
@@ -1716,7 +1734,7 @@ parser_parse_implement(Parser *parser, AstBody *program, const Token *name_token
 		goto error;
 	}
 
-	if (parser_ast_body_push(program, node) != EXIT_SUCCESS)
+	if (parser_push_node(parser, program, node) != EXIT_SUCCESS)
 	{
 		goto error;
 	}
@@ -1736,7 +1754,7 @@ parser_parse_named_declaration(Parser *parser, AstBody *program)
 
 	if (!parser_parse_name(parser, &name))
 	{
-		parser_error(name_token, "expected a declaration name but found `%.*s`", (int) name_token->length, name_token->lexeme);
+		parser_error(parser, name_token, "expected a declaration name but found `%.*s`", (int) name_token->length, name_token->lexeme);
 		return EXIT_FAILURE;
 	}
 
@@ -1803,7 +1821,7 @@ parser_parse_named_declaration(Parser *parser, AstBody *program)
 			return parser_parse_implement(parser, program, name_token, name);
 
 		default:
-			parser_error(keyword, "expected a declaration keyword but found `%.*s`", (int) keyword->length, keyword->lexeme);
+			parser_error(parser, keyword, "expected a declaration keyword but found `%.*s`", (int) keyword->length, keyword->lexeme);
 			return EXIT_FAILURE;
 	}
 }
@@ -2283,7 +2301,7 @@ parser_print(const AstBody *program)
 
 
 int
-parser_parse(const Token *tokens, size_t count, AstBody *program)
+parser_parse(const Token *tokens, size_t count, const char *file_name, AstBody *program)
 {
 	if (tokens == NULL || count == 0 || program == NULL)
 	{
@@ -2293,7 +2311,8 @@ parser_parse(const Token *tokens, size_t count, AstBody *program)
 	Parser parser = {
 		.tokens = tokens,
 		.count = count,
-		.current = 0
+		.current = 0,
+		.file_name = file_name
 	};
 
 	program->items = NULL;
