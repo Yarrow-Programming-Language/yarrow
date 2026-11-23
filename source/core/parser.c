@@ -848,11 +848,13 @@ parser_parse_match(Parser *parser, AstBody *body)
 
 		// A multi-case group shares one body: c1 case c2 case body end.
 		// A segment closed by `case` is another condition, the one closed
-		// by `end` is the body of the whole group.
-		static const TokenKind group_stops[] = { TOKEN_CASE, TOKEN_END };
+		// by `end` is the body of the whole group. `else` stops the group
+		// so a missing `end` is reported at the `else` instead of leaking
+		// into the body parse.
+		static const TokenKind group_stops[] = { TOKEN_CASE, TOKEN_END, TOKEN_ELSE };
 		AstBody segment = { 0 };
 
-		if (parser_parse_body(parser, &segment, group_stops, 2) != EXIT_SUCCESS)
+		if (parser_parse_body(parser, &segment, group_stops, 3) != EXIT_SUCCESS)
 		{
 			parser_free_body(&segment);
 			parser_free_node(case_node);
@@ -870,7 +872,7 @@ parser_parse_match(Parser *parser, AstBody *body)
 
 			parser_advance(parser);
 
-			if (parser_parse_body(parser, &segment, group_stops, 2) != EXIT_SUCCESS)
+			if (parser_parse_body(parser, &segment, group_stops, 3) != EXIT_SUCCESS)
 			{
 				parser_free_body(&segment);
 				parser_free_node(case_node);
@@ -879,7 +881,14 @@ parser_parse_match(Parser *parser, AstBody *body)
 		}
 
 		case_node->as.match_case.body = segment;
-		parser_match(parser, TOKEN_END);
+
+		// Every case group is closed by its own `end`, before the `else`
+		// or the `end` of the enclosing match.
+		if (parser_expect(parser, TOKEN_END, "`end`") == NULL)
+		{
+			parser_free_node(case_node);
+			goto error;
+		}
 
 		if (parser_ast_body_push(&node->as.match.cases, case_node) != EXIT_SUCCESS)
 		{
