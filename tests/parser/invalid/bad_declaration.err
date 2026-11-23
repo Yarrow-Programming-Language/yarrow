@@ -1,0 +1,1 @@
+ERROR: expected a declaration name but found `1` at tests/parser/invalid/bad_declaration.yar:1:1

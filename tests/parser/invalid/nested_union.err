@@ -1,0 +1,1 @@
+ERROR: unexpected `|` in a body; `|` is only used in union types and unions cannot nest at tests/parser/invalid/nested_union.yar:2:30

@@ -1,0 +1,1 @@
+ERROR: expected a type but found `+` at tests/parser/invalid/bad_type.yar:2:18

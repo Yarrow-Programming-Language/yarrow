@@ -1,0 +1,50 @@
+function main private
+  array_literal
+  as array<i32>
+  array_literal
+  as hashmap<string i32>
+  fixed_array_literal
+  as array<i32 0>
+  fixed_array_literal
+  as hashmap<string i32 0>
+  struct_literal
+  word drop
+  array_literal
+    literal 43
+    literal 54
+    literal 65
+  as array<i32>
+  fixed_array_literal
+    literal 10
+    literal 20
+    literal 30
+  as array<i32 3>
+  fixed_array_literal
+    literal 10
+    literal 20
+    literal 30
+  as array<i32 _>
+  fixed_array_literal
+    literal "first"
+    literal 4
+    literal "second"
+    literal 5
+  as hashmap<string i32 2>
+  array_literal
+    literal "first"
+    literal 4
+    literal "second"
+    literal 5
+  as hashmap<string i32>
+  struct_literal
+    word x
+    literal 5
+    word y
+    literal 20
+  variable point mutable Point
+  struct_literal
+    word x
+    literal 6
+    word y
+    literal 50
+  variable otherPoint mutable {i32 x i32 y}

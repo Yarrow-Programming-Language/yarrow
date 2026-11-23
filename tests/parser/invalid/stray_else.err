@@ -1,0 +1,1 @@
+ERROR: unexpected `else` in a body; `else` is only allowed after an `if` branch at tests/parser/invalid/stray_else.yar:2:4

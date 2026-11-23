@@ -1,0 +1,1 @@
+ERROR: a generic type needs at least one argument at tests/parser/invalid/empty_generic.yar:2:20

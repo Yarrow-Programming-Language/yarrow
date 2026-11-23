@@ -1,0 +1,1 @@
+ERROR: a union type cannot be empty at tests/parser/invalid/empty_union.yar:2:15

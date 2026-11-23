@@ -1,0 +1,36 @@
+function main private
+  literal 5
+  literal 10
+  word <
+  if
+    literal 1
+  else
+    literal 2
+  literal 0
+  variable counter mutable i32
+  word counter
+  literal 5
+  word <
+  for
+    word counter
+    word inc
+    word set
+  defer
+    literal "bye"
+    word drop
+  unsafe
+    literal 1
+  handle risky_operation
+    match
+      case
+        word dup
+        word MY_ERROR
+        word ==
+        body
+          literal "caught"
+          word drop
+    else
+      literal "unknown"
+      word drop
+    literal 0
+    word return

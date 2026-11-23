@@ -1,4 +1,4 @@
-.PHONY: all build run clean
+.PHONY: all build run test clean
 
 CC := clang
 
@@ -25,6 +25,9 @@ build: $(TARGET)
 
 run: build
 	./$(TARGET)
+
+test: build
+	./tests/run_tests.sh
 
 clean:
 	rm -rf $(BUILD_DIR)

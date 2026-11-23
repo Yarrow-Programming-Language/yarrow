@@ -1,0 +1,1 @@
+ERROR: unexpected `case` in a body; `case` is only allowed inside a `match` at tests/parser/invalid/stray_keyword.yar:2:4

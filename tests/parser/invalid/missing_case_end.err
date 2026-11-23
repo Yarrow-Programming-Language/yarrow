@@ -1,0 +1,1 @@
+ERROR: expected `end` but found `else` at tests/parser/invalid/missing_case_end.yar:5:3

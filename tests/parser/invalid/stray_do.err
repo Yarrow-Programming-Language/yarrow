@@ -1,0 +1,1 @@
+ERROR: unexpected `do` in a body; `do` is only allowed after a function signature at tests/parser/invalid/stray_do.yar:2:4

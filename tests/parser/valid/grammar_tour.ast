@@ -1,0 +1,501 @@
+require "std.error" error
+require "std.io" io
+function my_function private
+  literal 1
+  literal 2
+  word +
+  literal 5
+  literal 3
+  word -
+  literal 4
+  literal 2
+  word *
+  literal 10
+  literal 4
+  word /
+  literal 10
+  literal 3
+  word //
+  literal 10
+  literal 3
+  word %
+  literal 2
+  literal 3
+  word ^
+  word drop
+  literal "hello"
+  literal " world"
+  word ~
+  word drop
+  literal true
+  literal false
+  word and
+  literal true
+  literal false
+  word or
+  literal true
+  word not
+  word drop
+  literal 1
+  literal 2
+  word ==
+  literal 1
+  literal 2
+  word !=
+  literal 5
+  literal 3
+  word >
+  literal 3
+  literal 5
+  word <
+  literal 5
+  literal 3
+  word >=
+  literal 3
+  literal 5
+  word <=
+  word drop
+  literal 1
+  literal 2
+  word and
+  literal 1
+  literal 5
+  word or
+  literal 4
+  literal 5
+  word xor
+  literal 5
+  literal 2
+  word left_shift
+  literal 5
+  literal 2
+  word right_shift
+  literal 5
+  word not
+  word drop
+  literal 42
+  word -
+  literal 900
+  literal 1_000
+  literal 0b100110
+  literal 0xAB12
+  literal 3.14
+  literal 6_329.5
+  literal "hello"
+  literal '\n'
+  literal true
+  word drop
+  literal 42
+  word typeof
+  word drop
+  literal 42
+  word dup
+  literal 5
+  word inc
+  literal 5
+  word dec
+  literal 2
+  literal 1
+  word swap
+  literal 2
+  literal 3
+  literal 1
+  word rot
+  literal 3
+  literal 1
+  literal 2
+  word unrot
+  literal 56
+  literal 42
+  word pop
+  word drop
+  array_literal
+  as array<i32>
+  array_literal
+  as hashmap<string i32>
+  fixed_array_literal
+  as array<i32 0>
+  fixed_array_literal
+  as hashmap<string i32 0>
+  struct_literal
+  word drop
+  array_literal
+    literal 43
+    literal 54
+    literal 65
+  as array<i32>
+  fixed_array_literal
+    literal 10
+    literal 20
+    literal 30
+  as array<i32 3>
+  fixed_array_literal
+    literal 10
+    literal 20
+    literal 30
+  as array<i32 _>
+  fixed_array_literal
+    literal "first"
+    literal 4
+    literal "second"
+    literal 5
+  as hashmap<string i32 2>
+  fixed_array_literal
+    literal "first"
+    literal 4
+    literal "second"
+    literal 5
+  as hashmap<string i32 _>
+  array_literal
+    literal "first"
+    literal 4
+    literal "second"
+    literal 5
+  as hashmap<string i32>
+  word drop
+  literal 42
+  variable myVar mutable i32
+  literal 23
+  set myVar
+  literal 100
+  variable myConst const i32
+  literal 50
+  variable myStatic static i32
+  word myVar
+  word myVar
+  word typeof
+  word drop
+  function add private
+    param i32
+    param i32
+    word +
+    word return
+  result i32
+  literal 3
+  literal 4
+  call add
+  literal 5
+  literal 10
+  word <
+  if
+    literal "less"
+    call io.write_line
+  else
+    literal "not less"
+    call io.write_line
+  word myVar
+  word typeof
+  word i32
+  word ==
+  if
+    literal "is i32"
+    call io.write_line
+  else
+    literal "is not i32"
+    call io.write_line
+  literal 85
+  variable score const i32
+  word score
+  match
+    case
+      word dup
+      literal 85
+      word ==
+      body
+        literal "exact match"
+        call io.write_line
+    case
+      word dup
+      literal 50
+      word <
+      body
+        literal "under 50"
+        call io.write_line
+    case
+      word dup
+      literal 60
+      word <
+      word dup
+      literal 70
+      word >
+      body
+        literal "between 60 and 70"
+        call io.write_line
+  else
+    literal "did not match everything above"
+    call io.write_line
+    word drop
+  require "std.loop" loop
+  literal 0
+  variable counter mutable i32
+  word counter
+  literal 5
+  word <
+  for
+    word counter
+    word inc
+    word set
+  fixed_array_literal
+    literal 4
+    literal 5
+    literal 6
+    literal 7
+    literal 8
+    literal 9
+    literal 10
+  as array<i32 _>
+  for
+  literal 0
+  literal 10
+  word loop.integer_range
+  for
+struct Point private
+  field i32 x public
+  field i32 y private
+implement Point
+  function distance public
+    param reference<Point>
+    variable self const reference<Point>
+    word self.x
+    word self.x
+    word *
+    word self.y
+    word self.y
+    word *
+    word +
+    word return
+  result i32
+  function setX public
+    param mutable_reference<Point>
+    param i32
+    variable self const mutable_reference<Point>
+    variable newValue const i32
+    word newValue
+    set self.x
+function struct_function private
+  struct_literal
+    word x
+    literal 5
+    word y
+    literal 20
+  variable point mutable Point
+  literal 10
+  set point.x
+  word point
+  word borrow
+  call point.distance
+  word Point.x
+  word typeof
+  struct_literal
+    word x
+    literal 6
+    word y
+    literal 50
+  variable otherPoint mutable {i32 x i32 y}
+enum Color
+  member RED
+  member GREEN
+  member BLUE = 10
+function enum_function private
+  word Color.RED
+  variable myColor const Color
+  word myColor
+  match
+    case
+      word dup
+      word Color.RED
+      word ==
+      body
+        literal "the color is red"
+        call io.write_line
+    case
+      word dup
+      word Color.GREEN
+      word ==
+      body
+        literal "the color is green"
+        call io.write_line
+  else
+    literal "the color is not matched"
+    call io.write_line
+enum MyEnum carrier string
+  member MY_VALUE = "some string"
+union MyUnion
+  member i32
+  member string
+function union_function private
+  literal 42
+  variable val mutable MyUnion
+  literal "a string"
+  set val
+  word val
+  word typeof
+  word drop
+  word val
+  match
+    case
+      word i32
+      body
+        word val
+        literal 4
+        word +
+    case
+      word string
+      body
+        word val
+        call io.write_line
+  else
+  literal "some text"
+  variable unionLiteral mutable |i32 string|
+function defer_function private
+  require "std.fs" fs
+  literal "myfile.txt"
+  literal 'r'
+  call fs.open_file
+  word unwrap
+  variable file const reference<File>
+  defer
+    word file
+    call fs.close_file
+  defer
+    literal "A"
+    call io.write_line
+    literal "B"
+    call io.write_line
+function memory_function private
+  literal "std.array"
+  word array
+  word require
+  literal "temp"
+  word pop
+  literal "hello"
+  variable myStr mutable string
+  literal "world"
+  set myStr
+  array_literal
+    literal 1
+    literal 2
+    literal 3
+  variable myList mutable array<i32>
+  word myList
+  word borrow
+  word pop
+  word myList
+  word mutable_borrow
+  literal 4
+  word array
+  word .
+  call push_last
+  word unwrap
+  array_literal
+  variable myList2 mutable array<i32>
+  word myList
+  word myList2
+  word move
+  word myList2
+  literal 4
+  word array
+  word .
+  call push_last
+  word unwrap
+error MyCustomErrors
+  member MY_CUSTOM_ERROR
+error MyFirstErrors
+  member MY_VERY_IMPORTANT_ERROR
+error MySecondErrors
+  member MY_OTHER_IMPORTANT_ERROR
+function error_function private
+  function risky_operation private
+    word MyCustomErrors.MY_CUSTOM_ERROR
+    word return
+  result |i32 MyCustomErrors|
+  handle risky_operation
+    match
+      case
+        word dup
+        word error.MY_CUSTOM_ERROR
+        word ==
+        body
+          literal "Caught Custom Error"
+          call io.write_line
+    else
+      literal "Unknown error"
+      call io.write_line
+    literal 0
+    word return
+  handle risky_operation
+    literal 0
+    word return
+  function multi_error_function private
+    function first_function private
+      word MyFirstErrors.MY_VERY_IMPORTANT_ERROR
+      word return
+    result |void MyFirstErrors|
+    function second_function private
+      word MySecondErrors.MY_OTHER_IMPORTANT_ERROR
+      word return
+    result |void MySecondErrors|
+  result |void _|
+struct Cell private
+  field i32 value public
+function pointer_function private unsafe
+  require "std.mem" mem
+  unsafe
+    struct_literal
+    variable gpa const mem.allocator.GeneralPurposeAllocator
+    word i32
+    literal 100
+    call gpa.allocate
+    word unwrap
+    variable p mutable pointer<i32>
+    defer
+      word p
+      call gpa.free
+    word p
+    literal 42
+    word store
+    word p
+    word load
+    word drop
+    word p
+    literal 4
+    word +
+    variable q const pointer<i32>
+    word p
+    literal 4
+    word mem.byte_offset
+    word p
+    literal 1
+    word mem.pointer_offset
+    word q
+    literal 99
+    word store
+    word q
+    word load
+    word drop
+    word Cell
+    literal 100
+    call gpa.allocate
+    word unwrap
+    variable cp mutable pointer<Cell>
+    defer
+      word cp
+      call gpa.free
+    struct_literal
+      word value
+      literal 7
+    set cp
+    word cp.value
+    word drop
+function main private
+  call my_function
+  call struct_function
+  call enum_function
+  call union_function
+  call defer_function
+  call memory_function
+  call error_function
+  unsafe
+    call pointer_function
+  literal "Hello, Yarrow!"
+  call io.write_line

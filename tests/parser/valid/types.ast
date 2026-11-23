@@ -1,0 +1,22 @@
+function main private
+  literal 42
+  variable myVar mutable i32
+  literal 100
+  variable myConst const i32
+  literal 50
+  variable myStatic static i32
+  literal "some text"
+  variable unionLiteral mutable |i32 string|
+  struct_literal
+  variable gpa const mem.allocator.GeneralPurposeAllocator
+  word i32
+  literal 100
+  call gpa.allocate
+  word unwrap
+  variable p mutable pointer<i32>
+  variable q const const_pointer<Cell>
+  variable r const mutable_reference<Point>
+  literal 1
+  literal 2
+  word +
+  word drop

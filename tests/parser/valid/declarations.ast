@@ -1,0 +1,29 @@
+require "std.io" io
+struct Point private
+  field i32 x public
+  field i32 y private
+enum Color
+  member RED
+  member GREEN = 10
+  member BLUE
+enum MyEnum carrier string
+  member MY_VALUE = "some string"
+union Shape
+  member i32
+  member string
+error MyErrors
+  member NOT_FOUND
+  member OUT_OF_RANGE
+implement Point
+  function distance public
+    param reference<Point>
+    variable self const reference<Point>
+    word self.x
+    word self.x
+    word *
+    word self.y
+    word self.y
+    word *
+    word +
+    word return
+  result i32

@@ -54,3 +54,12 @@ maintainability.
   and code organization.
 - Prefer simple and readable implementations.
 - For scripting, prefer bash. If insufficient, use python via uv.
+
+## Testing instructions
+
+- When implementing a new feature, add a corresponding unit test only if it is
+  meaningful.
+- Before marking a task as done, run the unit tests with `make test`. Every
+  test must pass with `ok`.
+- If a new feature breaks a test, check whether the test is still meaningful in
+  the current context before deleting or fixing it.

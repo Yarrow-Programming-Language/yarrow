@@ -1,0 +1,37 @@
+function main private
+  literal 85
+  variable score const i32
+  word score
+  match
+    case
+      word dup
+      literal 85
+      word ==
+      body
+        literal "exact match"
+        call io.write_line
+    case
+      word dup
+      literal 50
+      word <
+      word dup
+      literal 70
+      word >
+      body
+        literal "between 50 and 70"
+        call io.write_line
+  else
+    literal "no match"
+    call io.write_line
+  word Color.RED
+  variable myColor const Color
+  word myColor
+  match
+    case
+      word dup
+      word Color.RED
+      word ==
+      body
+        literal "red"
+        call io.write_line
+  else

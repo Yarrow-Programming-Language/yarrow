@@ -1,0 +1,14 @@
+function add private
+  param i32
+  param i32
+  word +
+  word return
+result i32
+function greet private
+  literal "hello"
+  call io.write_line
+function main private
+  literal 3
+  literal 4
+  call add
+  call greet

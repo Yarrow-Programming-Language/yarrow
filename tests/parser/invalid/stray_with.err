@@ -1,0 +1,1 @@
+ERROR: unexpected `with` in a body; `with` is only allowed after a function `end` to declare its return type at tests/parser/invalid/stray_with.yar:2:4
