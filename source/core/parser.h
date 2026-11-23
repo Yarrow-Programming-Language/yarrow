@@ -92,6 +92,9 @@ typedef enum {
 	AST_UNION_MEMBER,
 	// Body words
 	AST_LITERAL,
+	AST_ARRAY_LITERAL,
+	AST_FIXED_ARRAY_LITERAL,
+	AST_STRUCT_LITERAL,
 	AST_WORD,
 	AST_VARIABLE,
 	AST_SET,
@@ -122,6 +125,7 @@ struct ast_node {
 		struct { AstName name; bool has_value; Token value; } enum_member;
 		struct { AstType *type; } union_member;
 		struct { Token token; } literal;
+		struct { AstBody elements; } container;
 		struct { AstName name; } word;
 		struct { AstName name; Token mutability; AstType *type; } variable;
 		struct { AstName name; } set;

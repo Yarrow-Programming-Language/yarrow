@@ -745,6 +745,44 @@ parser_parse_simple(Parser *parser, AstBody *body)
 }
 
 static int
+parser_parse_container_literal(Parser *parser, AstBody *body, AstKind kind, TokenKind close, const char *close_name)
+{
+	const Token *token = parser_peek(parser);
+
+	parser_advance(parser);
+
+	AstNode *node = parser_new_node(token, kind);
+
+	if (node == NULL)
+	{
+		return EXIT_FAILURE;
+	}
+
+	TokenKind stops[1] = { close };
+
+	if (parser_parse_body(parser, &node->as.container.elements, stops, 1) != EXIT_SUCCESS)
+	{
+		goto error;
+	}
+
+	if (parser_expect(parser, close, close_name) == NULL)
+	{
+		goto error;
+	}
+
+	if (parser_ast_body_push(body, node) != EXIT_SUCCESS)
+	{
+		goto error;
+	}
+
+	return EXIT_SUCCESS;
+
+	error:
+	parser_free_node(node);
+	return EXIT_FAILURE;
+}
+
+static int
 parser_parse_require(Parser *parser, AstBody *body)
 {
 	const Token *token = parser_peek(parser);
@@ -1255,6 +1293,15 @@ parser_parse_word(Parser *parser, AstBody *body)
 		case TOKEN_PIPE:
 			parser_error(token, "unexpected `|` in a body; `|` is only used in union types and unions cannot nest");
 			return EXIT_FAILURE;
+
+		case TOKEN_LEFT_PAREN:
+			return parser_parse_container_literal(parser, body, AST_ARRAY_LITERAL, TOKEN_RIGHT_PAREN, "`)`");
+
+		case TOKEN_LEFT_SQUARE:
+			return parser_parse_container_literal(parser, body, AST_FIXED_ARRAY_LITERAL, TOKEN_RIGHT_SQUARE, "`]`");
+
+		case TOKEN_LEFT_CURLY:
+			return parser_parse_container_literal(parser, body, AST_STRUCT_LITERAL, TOKEN_RIGHT_CURLY, "`}`");
 
 		case TOKEN_IDENTIFIER:
 		case TOKEN_TYPE:
@@ -1843,6 +1890,12 @@ parser_free_node(AstNode *node)
 			parser_free_body(&node->as.handle.body);
 			break;
 
+		case AST_ARRAY_LITERAL:
+		case AST_FIXED_ARRAY_LITERAL:
+		case AST_STRUCT_LITERAL:
+			parser_free_body(&node->as.container.elements);
+			break;
+
 		case AST_PARAM:
 			parser_free_type(node->as.param.type);
 			break;
@@ -2106,6 +2159,21 @@ parser_print_node(const AstNode *node, int depth)
 			printf("literal ");
 			parser_print_token(&node->as.literal.token);
 			printf("\n");
+			break;
+
+		case AST_ARRAY_LITERAL:
+			printf("array_literal\n");
+			parser_print_body(&node->as.container.elements, depth + 1);
+			break;
+
+		case AST_FIXED_ARRAY_LITERAL:
+			printf("fixed_array_literal\n");
+			parser_print_body(&node->as.container.elements, depth + 1);
+			break;
+
+		case AST_STRUCT_LITERAL:
+			printf("struct_literal\n");
+			parser_print_body(&node->as.container.elements, depth + 1);
 			break;
 
 		case AST_WORD:
