@@ -9,6 +9,7 @@
 #define PARSER_VERSION "0.0.1"
 
 typedef struct ast_node AstNode;
+typedef struct ast_type AstType;
 
 typedef struct {
 	AstNode **items;
@@ -21,8 +22,59 @@ typedef struct {
 	size_t count;
 } AstSpan;
 
-typedef AstSpan AstType;
 typedef AstSpan AstName;
+
+typedef enum {
+	AST_TYPE_BASE,
+	AST_TYPE_GENERIC,
+	AST_TYPE_UNION,
+	AST_TYPE_STRUCT
+} AstTypeKind;
+
+typedef enum {
+	AST_TYPE_MEMBER_TYPE,
+	AST_TYPE_MEMBER_SIZE,
+	AST_TYPE_MEMBER_PLACEHOLDER
+} AstTypeMemberKind;
+
+typedef struct {
+	AstTypeMemberKind kind;
+	TokenLocation start;
+	TokenLocation end;
+	union {
+		AstType *type;
+		Token size;
+	} as;
+} AstTypeMember;
+
+typedef struct {
+	AstType *type;
+	AstName name;
+} AstTypeField;
+
+typedef struct {
+	AstTypeMember *items;
+	size_t count;
+	size_t capacity;
+} AstTypeMembers;
+
+typedef struct {
+	AstTypeField *items;
+	size_t count;
+	size_t capacity;
+} AstTypeFields;
+
+struct ast_type {
+	AstTypeKind kind;
+	TokenLocation start;
+	TokenLocation end;
+	union {
+		struct { AstName name; } base;
+		struct { AstType *base; AstTypeMembers arguments; } generic;
+		struct { AstTypeMembers members; } union_type;
+		struct { AstTypeFields fields; } struct_type;
+	} as;
+};
 
 typedef enum {
 	// Declarations
@@ -59,22 +111,22 @@ struct ast_node {
 	TokenLocation location;
 	union {
 		struct { Token path; AstName scope; bool has_scope; } require;
-		struct { AstName name; bool is_public; bool is_unsafe; AstBody params; AstBody body; AstType result; bool has_result; } function;
+		struct { AstName name; bool is_public; bool is_unsafe; AstBody params; AstBody body; AstType *result; bool has_result; } function;
 		struct { AstName name; bool is_public; AstBody fields; } struct_decl;
-		struct { AstName name; bool is_public; AstType carrier; bool has_carrier; AstBody members; } enum_decl;
+		struct { AstName name; bool is_public; AstType *carrier; bool has_carrier; AstBody members; } enum_decl;
 		struct { AstName name; bool is_public; AstBody members; } union_decl;
 		struct { AstName name; bool is_public; AstBody members; } error_decl;
 		struct { AstName name; AstBody methods; } implement;
-		struct { AstType type; } param;
-		struct { AstType type; AstName name; bool is_public; } field;
+		struct { AstType *type; } param;
+		struct { AstType *type; AstName name; bool is_public; } field;
 		struct { AstName name; bool has_value; Token value; } enum_member;
-		struct { AstType type; } union_member;
+		struct { AstType *type; } union_member;
 		struct { Token token; } literal;
 		struct { AstName name; } word;
-		struct { AstName name; Token mutability; AstType type; } variable;
+		struct { AstName name; Token mutability; AstType *type; } variable;
 		struct { AstName name; } set;
 		struct { AstName name; } call;
-		struct { AstType type; } as_cast;
+		struct { AstType *type; } as_cast;
 		struct { AstBody then_body; AstBody else_body; bool has_else; } if_else;
 		struct { AstBody cases; AstBody else_body; bool has_else; } match;
 		struct { AstBody condition; AstBody body; } match_case;

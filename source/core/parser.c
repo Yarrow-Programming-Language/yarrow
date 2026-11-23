@@ -12,6 +12,9 @@ static int parser_parse_body(Parser *parser, AstBody *body, const TokenKind *sto
 static int parser_parse_word(Parser *parser, AstBody *body);
 static int parser_parse_declaration(Parser *parser, AstBody *program);
 static void parser_print_node(const AstNode *node, int depth);
+static void parser_print_type(const AstType *type);
+static void parser_free_type(AstType *type);
+static ParserTypeStatus parser_parse_type(Parser *parser, AstType **type);
 
 static void
 parser_error(const Token *token, const char *format, ...)
@@ -218,246 +221,134 @@ parser_ast_body_append(AstBody *destination, AstBody *source)
 	return EXIT_SUCCESS;
 }
 
-static const Token *
-parser_token_at(const Token *tokens, size_t count, size_t index)
+static TokenLocation
+parser_previous_location(const Parser *parser)
 {
-	return index < count ? &tokens[index] : &tokens[count - 1];
+	return parser->tokens[parser->current - 1].location;
+}
+
+static void
+parser_free_type_members(AstTypeMembers *members)
+{
+	for (size_t i = 0; i < members->count; i++)
+	{
+		if (members->items[i].kind == AST_TYPE_MEMBER_TYPE)
+		{
+			parser_free_type(members->items[i].as.type);
+		}
+	}
+
+	free(members->items);
+	members->items = NULL;
+	members->count = 0;
+	members->capacity = 0;
+}
+
+static void
+parser_free_type(AstType *type)
+{
+	if (type == NULL)
+	{
+		return;
+	}
+
+	switch (type->kind)
+	{
+		case AST_TYPE_GENERIC:
+			parser_free_type(type->as.generic.base);
+			parser_free_type_members(&type->as.generic.arguments);
+			break;
+
+		case AST_TYPE_UNION:
+			parser_free_type_members(&type->as.union_type.members);
+			break;
+
+		case AST_TYPE_STRUCT:
+			for (size_t i = 0; i < type->as.struct_type.fields.count; i++)
+			{
+				parser_free_type(type->as.struct_type.fields.items[i].type);
+			}
+
+			free(type->as.struct_type.fields.items);
+			break;
+
+		case AST_TYPE_BASE:
+			break;
+	}
+
+	free(type);
+}
+
+static AstType *
+parser_new_type(const Token *token, AstTypeKind kind)
+{
+	AstType *type = calloc(1, sizeof(AstType));
+
+	if (type == NULL)
+	{
+		parser_error(token, "failed to allocate memory for the type node");
+		return NULL;
+	}
+
+	type->kind = kind;
+	type->start = token->location;
+	type->end = token->location;
+	return type;
 }
 
 static bool
-parser_validate_type_at(const Token *tokens, size_t count, size_t *cursor)
+parser_type_members_push(AstTypeMembers *members, const AstTypeMember *member)
 {
-	if (*cursor >= count)
+	if (members->count >= members->capacity)
 	{
-		return false;
-	}
+		size_t new_capacity = members->capacity == 0 ? 4 : members->capacity * 2;
+		AstTypeMember *grow = realloc(members->items, new_capacity * sizeof(AstTypeMember));
 
-	const Token *token = &tokens[*cursor];
-
-	switch (token->kind)
-	{
-		case TOKEN_PIPE:
-		{
-			(*cursor)++;
-
-			size_t members = 0;
-
-			while (*cursor < count && tokens[*cursor].kind != TOKEN_PIPE)
-			{
-				if (tokens[*cursor].kind == TOKEN_UNDERSCORE)
-				{
-					(*cursor)++;
-				}
-				else if (!parser_validate_type_at(tokens, count, cursor))
-				{
-					return false;
-				}
-
-				members++;
-			}
-
-			if (members == 0)
-			{
-				parser_error(token, "a union type cannot be empty");
-				return false;
-			}
-
-			if (*cursor >= count)
-			{
-				parser_error(&tokens[count - 1], "expected `|` to close the union type");
-				return false;
-			}
-
-			(*cursor)++;
-			return true;
-		}
-
-		case TOKEN_LEFT_CURLY:
-		{
-			(*cursor)++;
-
-			while (*cursor < count && tokens[*cursor].kind != TOKEN_RIGHT_CURLY)
-			{
-				if (!parser_validate_type_at(tokens, count, cursor))
-				{
-					return false;
-				}
-
-				if (*cursor >= count || tokens[*cursor].kind != TOKEN_IDENTIFIER)
-				{
-					parser_error(parser_token_at(tokens, count, *cursor), "expected a field name after the field type");
-					return false;
-				}
-
-				(*cursor)++;
-			}
-
-			if (*cursor >= count)
-			{
-				parser_error(&tokens[count - 1], "expected `}` to close the struct type");
-				return false;
-			}
-
-			(*cursor)++;
-			return true;
-		}
-
-		case TOKEN_TYPE:
-		case TOKEN_IDENTIFIER:
-		{
-			(*cursor)++;
-
-			while (*cursor + 1 < count && tokens[*cursor].kind == TOKEN_DOT && tokens[*cursor + 1].kind == TOKEN_IDENTIFIER)
-			{
-				*cursor += 2;
-			}
-
-			if (*cursor >= count || tokens[*cursor].kind != TOKEN_LESS)
-			{
-				return true;
-			}
-
-			(*cursor)++;
-
-			size_t arguments = 0;
-
-			while (*cursor < count && tokens[*cursor].kind != TOKEN_GREATER)
-			{
-				if (tokens[*cursor].kind == TOKEN_UNDERSCORE || parser_is_size_literal(tokens[*cursor].kind))
-				{
-					(*cursor)++;
-				}
-				else if (!parser_validate_type_at(tokens, count, cursor))
-				{
-					return false;
-				}
-
-				arguments++;
-			}
-
-			if (arguments == 0)
-			{
-				parser_error(parser_token_at(tokens, count, *cursor), "a generic type needs at least one argument");
-				return false;
-			}
-
-			if (*cursor >= count)
-			{
-				parser_error(&tokens[count - 1], "expected `>` to close the generic type");
-				return false;
-			}
-
-			(*cursor)++;
-			return true;
-		}
-
-		default:
-			parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
-			return false;
-	}
-}
-
-static bool
-parser_validate_type(const Token *tokens, size_t count)
-{
-	size_t cursor = 0;
-
-	if (!parser_validate_type_at(tokens, count, &cursor))
-	{
-		return false;
-	}
-
-	if (cursor != count)
-	{
-		parser_error(&tokens[cursor], "unexpected `%.*s` after the type", (int) tokens[cursor].length, tokens[cursor].lexeme);
-		return false;
-	}
-
-	return true;
-}
-
-static bool
-parser_scan_generic_arguments(Parser *parser)
-{
-	size_t depth = 1;
-
-	parser_advance(parser);
-
-	while (depth > 0)
-	{
-		TokenKind kind = parser_peek(parser)->kind;
-
-		if (kind == TOKEN_EOF)
+		if (grow == NULL)
 		{
 			return false;
 		}
 
-		if (kind == TOKEN_LESS)
-		{
-			depth++;
-		}
-		else if (kind == TOKEN_GREATER)
-		{
-			depth--;
-		}
-
-		parser_advance(parser);
+		members->items = grow;
+		members->capacity = new_capacity;
 	}
 
+	members->items[members->count++] = *member;
 	return true;
 }
 
 static bool
-parser_scan_struct_type(Parser *parser)
+parser_type_fields_push(AstTypeFields *fields, const AstTypeField *field)
 {
-	size_t depth = 1;
-
-	parser_advance(parser);
-
-	while (depth > 0)
+	if (fields->count >= fields->capacity)
 	{
-		TokenKind kind = parser_peek(parser)->kind;
+		size_t new_capacity = fields->capacity == 0 ? 4 : fields->capacity * 2;
+		AstTypeField *grow = realloc(fields->items, new_capacity * sizeof(AstTypeField));
 
-		if (kind == TOKEN_EOF)
+		if (grow == NULL)
 		{
 			return false;
 		}
 
-		if (kind == TOKEN_LEFT_CURLY)
-		{
-			depth++;
-		}
-		else if (kind == TOKEN_RIGHT_CURLY)
-		{
-			depth--;
-		}
-
-		parser_advance(parser);
+		fields->items = grow;
+		fields->capacity = new_capacity;
 	}
 
+	fields->items[fields->count++] = *field;
 	return true;
 }
 
 static bool
-parser_scan_union_member(Parser *parser)
+parser_parse_type_name(Parser *parser, AstName *name)
 {
-	TokenKind kind = parser_peek(parser)->kind;
+	const Token *first = parser_peek(parser);
 
-	if (kind == TOKEN_UNDERSCORE)
-	{
-		parser_advance(parser);
-		return true;
-	}
-
-	if (kind == TOKEN_LEFT_CURLY)
-	{
-		return parser_scan_struct_type(parser);
-	}
-
-	if (!parser_is_type_start(kind))
+	if (!parser_is_type_start(first->kind))
 	{
 		return false;
 	}
+
+	size_t start = parser->current;
 
 	parser_advance(parser);
 
@@ -467,88 +358,199 @@ parser_scan_union_member(Parser *parser)
 		parser_advance(parser);
 	}
 
-	if (parser_check(parser, TOKEN_LESS))
-	{
-		return parser_scan_generic_arguments(parser);
-	}
-
+	name->first = first;
+	name->count = parser->current - start;
 	return true;
 }
 
 static ParserTypeStatus
-parser_parse_type(Parser *parser, AstType *type)
+parser_parse_union_type(Parser *parser, AstType **out)
 {
+	*out = NULL;
+
 	const Token *first = parser_peek(parser);
-	size_t start = parser->current;
 
-	if (first->kind == TOKEN_PIPE)
+	parser_advance(parser);
+
+	AstType *type = parser_new_type(first, AST_TYPE_UNION);
+
+	if (type == NULL)
 	{
-		// Union literal type: |i32 string|. Unions cannot nest, so the
-		// first pipe at member level always closes the union.
-		parser_advance(parser);
+		return PARSER_TYPE_INVALID;
+	}
 
-		size_t members = 0;
-
-		while (!parser_check(parser, TOKEN_PIPE))
-		{
-			if (parser_check(parser, TOKEN_EOF))
-			{
-				return PARSER_TYPE_ABSENT;
-			}
-
-			if (!parser_scan_union_member(parser))
-			{
-				if (parser_check(parser, TOKEN_EOF))
-				{
-					return PARSER_TYPE_ABSENT;
-				}
-
-				// Not the start of a member: keep scanning to the
-				// closing pipe so the validator can report the
-				// offending token.
-				parser_advance(parser);
-				continue;
-			}
-
-			members++;
-		}
-
+	// An empty union is only the opening of a nested union, which the
+	// language forbids.
+	if (parser_check(parser, TOKEN_PIPE))
+	{
 		const Token *close = parser_peek(parser);
 
 		parser_advance(parser);
 
-		if (members == 0 && parser_is_type_start(parser_peek(parser)->kind))
+		if (parser_is_type_start(parser_peek(parser)->kind))
 		{
 			parser_error(close, "union types cannot nest");
-			return PARSER_TYPE_INVALID;
 		}
-
-		if (!parser_validate_type(first, parser->current - start))
+		else
 		{
+			parser_error(close, "a union type cannot be empty");
+		}
+
+		parser_free_type(type);
+		return PARSER_TYPE_INVALID;
+	}
+
+	while (!parser_check(parser, TOKEN_PIPE))
+	{
+		const Token *token = parser_peek(parser);
+
+		if (token->kind == TOKEN_EOF)
+		{
+			parser_free_type(type);
+			return PARSER_TYPE_ABSENT;
+		}
+
+		AstTypeMember member = { 0 };
+
+		if (token->kind == TOKEN_UNDERSCORE)
+		{
+			member.kind = AST_TYPE_MEMBER_PLACEHOLDER;
+			member.start = token->location;
+			member.end = token->location;
+			parser_advance(parser);
+		}
+		else
+		{
+			AstType *member_type = NULL;
+			ParserTypeStatus status = parser_parse_type(parser, &member_type);
+
+			if (status != PARSER_TYPE_VALID)
+			{
+				if (status == PARSER_TYPE_ABSENT)
+				{
+					parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+				}
+
+				parser_free_type(type);
+				return PARSER_TYPE_INVALID;
+			}
+
+			member.kind = AST_TYPE_MEMBER_TYPE;
+			member.as.type = member_type;
+			member.start = member_type->start;
+			member.end = member_type->end;
+		}
+
+		if (!parser_type_members_push(&type->as.union_type.members, &member))
+		{
+			parser_error(token, "failed to allocate memory for the union members");
+			parser_free_type(type);
+			return PARSER_TYPE_INVALID;
+		}
+	}
+
+	parser_advance(parser);
+
+	type->end = parser_previous_location(parser);
+	*out = type;
+	return PARSER_TYPE_VALID;
+}
+
+static ParserTypeStatus
+parser_parse_struct_type(Parser *parser, AstType **out)
+{
+	*out = NULL;
+
+	const Token *first = parser_peek(parser);
+
+	parser_advance(parser);
+
+	AstType *type = parser_new_type(first, AST_TYPE_STRUCT);
+
+	if (type == NULL)
+	{
+		return PARSER_TYPE_INVALID;
+	}
+
+	while (!parser_check(parser, TOKEN_RIGHT_CURLY))
+	{
+		const Token *token = parser_peek(parser);
+
+		if (token->kind == TOKEN_EOF)
+		{
+			parser_free_type(type);
+			return PARSER_TYPE_ABSENT;
+		}
+
+		AstType *field_type = NULL;
+		ParserTypeStatus status = parser_parse_type(parser, &field_type);
+
+		if (status != PARSER_TYPE_VALID)
+		{
+			if (status == PARSER_TYPE_ABSENT)
+			{
+				parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+			}
+
+			parser_free_type(type);
 			return PARSER_TYPE_INVALID;
 		}
 
-		type->first = first;
-		type->count = parser->current - start;
-		return PARSER_TYPE_VALID;
+		if (parser_check(parser, TOKEN_EOF))
+		{
+			parser_free_type(field_type);
+			parser_free_type(type);
+			return PARSER_TYPE_ABSENT;
+		}
+
+		const Token *field_name = parser_peek(parser);
+
+		if (field_name->kind != TOKEN_IDENTIFIER)
+		{
+			parser_error(field_name, "expected a field name after the field type");
+			parser_free_type(field_type);
+			parser_free_type(type);
+			return PARSER_TYPE_INVALID;
+		}
+
+		AstTypeField field = {
+			.type = field_type,
+			.name = { .first = field_name, .count = 1 }
+		};
+
+		if (!parser_type_fields_push(&type->as.struct_type.fields, &field))
+		{
+			parser_error(token, "failed to allocate memory for the struct fields");
+			parser_free_type(field_type);
+			parser_free_type(type);
+			return PARSER_TYPE_INVALID;
+		}
+
+		parser_advance(parser);
+	}
+
+	parser_advance(parser);
+
+	type->end = parser_previous_location(parser);
+	*out = type;
+	return PARSER_TYPE_VALID;
+}
+
+static ParserTypeStatus
+parser_parse_type(Parser *parser, AstType **out)
+{
+	*out = NULL;
+
+	const Token *first = parser_peek(parser);
+
+	if (first->kind == TOKEN_PIPE)
+	{
+		return parser_parse_union_type(parser, out);
 	}
 
 	if (first->kind == TOKEN_LEFT_CURLY)
 	{
-		// Struct literal type: {i32 x i32 y}.
-		if (!parser_scan_struct_type(parser))
-		{
-			return PARSER_TYPE_ABSENT;
-		}
-
-		if (!parser_validate_type(first, parser->current - start))
-		{
-			return PARSER_TYPE_INVALID;
-		}
-
-		type->first = first;
-		type->count = parser->current - start;
-		return PARSER_TYPE_VALID;
+		return parser_parse_struct_type(parser, out);
 	}
 
 	if (!parser_is_type_start(first->kind))
@@ -556,29 +558,109 @@ parser_parse_type(Parser *parser, AstType *type)
 		return PARSER_TYPE_ABSENT;
 	}
 
-	parser_advance(parser);
+	AstName name;
 
-	while (parser_check(parser, TOKEN_DOT) && parser_peek_at(parser, 1)->kind == TOKEN_IDENTIFIER)
+	if (!parser_parse_type_name(parser, &name))
 	{
-		parser_advance(parser);
-		parser_advance(parser);
+		return PARSER_TYPE_ABSENT;
 	}
 
-	if (parser_check(parser, TOKEN_LESS))
-	{
-		if (!parser_scan_generic_arguments(parser))
-		{
-			return PARSER_TYPE_ABSENT;
-		}
-	}
+	AstType *base = parser_new_type(first, AST_TYPE_BASE);
 
-	if (!parser_validate_type(first, parser->current - start))
+	if (base == NULL)
 	{
 		return PARSER_TYPE_INVALID;
 	}
 
-	type->first = first;
-	type->count = parser->current - start;
+	base->as.base.name = name;
+	base->end = parser_previous_location(parser);
+
+	if (!parser_check(parser, TOKEN_LESS))
+	{
+		*out = base;
+		return PARSER_TYPE_VALID;
+	}
+
+	parser_advance(parser);
+
+	AstType *type = parser_new_type(first, AST_TYPE_GENERIC);
+
+	if (type == NULL)
+	{
+		parser_free_type(base);
+		return PARSER_TYPE_INVALID;
+	}
+
+	type->as.generic.base = base;
+
+	while (!parser_check(parser, TOKEN_GREATER))
+	{
+		const Token *token = parser_peek(parser);
+
+		if (token->kind == TOKEN_EOF)
+		{
+			parser_free_type(type);
+			return PARSER_TYPE_ABSENT;
+		}
+
+		AstTypeMember member = { 0 };
+
+		if (token->kind == TOKEN_UNDERSCORE)
+		{
+			member.kind = AST_TYPE_MEMBER_PLACEHOLDER;
+			member.start = token->location;
+			member.end = token->location;
+			parser_advance(parser);
+		}
+		else if (parser_is_size_literal(token->kind))
+		{
+			member.kind = AST_TYPE_MEMBER_SIZE;
+			member.as.size = *token;
+			member.start = token->location;
+			member.end = token->location;
+			parser_advance(parser);
+		}
+		else
+		{
+			AstType *argument = NULL;
+			ParserTypeStatus status = parser_parse_type(parser, &argument);
+
+			if (status != PARSER_TYPE_VALID)
+			{
+				if (status == PARSER_TYPE_ABSENT)
+				{
+					parser_error(token, "expected a type but found `%.*s`", (int) token->length, token->lexeme);
+				}
+
+				parser_free_type(type);
+				return PARSER_TYPE_INVALID;
+			}
+
+			member.kind = AST_TYPE_MEMBER_TYPE;
+			member.as.type = argument;
+			member.start = argument->start;
+			member.end = argument->end;
+		}
+
+		if (!parser_type_members_push(&type->as.generic.arguments, &member))
+		{
+			parser_error(token, "failed to allocate memory for the type arguments");
+			parser_free_type(type);
+			return PARSER_TYPE_INVALID;
+		}
+	}
+
+	if (type->as.generic.arguments.count == 0)
+	{
+		parser_error(parser_peek(parser), "a generic type needs at least one argument");
+		parser_free_type(type);
+		return PARSER_TYPE_INVALID;
+	}
+
+	parser_advance(parser);
+
+	type->end = parser_previous_location(parser);
+	*out = type;
 	return PARSER_TYPE_VALID;
 }
 
@@ -944,7 +1026,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 	// Type cast: <Type> as
 	size_t saved = parser->current;
-	AstType type;
+	AstType *type = NULL;
 	ParserTypeStatus status = parser_parse_type(parser, &type);
 
 	if (status == PARSER_TYPE_INVALID)
@@ -960,6 +1042,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		if (node == NULL)
 		{
+			parser_free_type(type);
 			return EXIT_FAILURE;
 		}
 
@@ -974,6 +1057,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		return EXIT_SUCCESS;
 	}
 
+	parser_free_type(type);
 	parser->current = saved;
 
 	AstName name;
@@ -993,7 +1077,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 		parser_advance(parser);
 
 		const Token *type_token = parser_peek(parser);
-		AstType variable_type;
+		AstType *variable_type = NULL;
 		ParserTypeStatus status = parser_parse_type(parser, &variable_type);
 
 		if (status != PARSER_TYPE_VALID)
@@ -1010,6 +1094,7 @@ parser_parse_name_word(Parser *parser, AstBody *body)
 
 		if (node == NULL)
 		{
+			parser_free_type(variable_type);
 			return EXIT_FAILURE;
 		}
 
@@ -1236,7 +1321,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 	while (!parser_check(parser, TOKEN_DO) && !parser_check(parser, TOKEN_EOF))
 	{
 		const Token *param_token = parser_peek(parser);
-		AstType type;
+		AstType *type = NULL;
 		ParserTypeStatus status = parser_parse_type(parser, &type);
 
 		if (status != PARSER_TYPE_VALID)
@@ -1253,6 +1338,7 @@ parser_parse_function(Parser *parser, AstBody *program, const Token *name_token,
 
 		if (param == NULL)
 		{
+			parser_free_type(type);
 			goto error;
 		}
 
@@ -1328,7 +1414,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 	while (!parser_check(parser, TOKEN_END) && !parser_check(parser, TOKEN_EOF))
 	{
 		const Token *field_token = parser_peek(parser);
-		AstType type;
+		AstType *type = NULL;
 		ParserTypeStatus status = parser_parse_type(parser, &type);
 
 		if (status != PARSER_TYPE_VALID)
@@ -1345,6 +1431,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 
 		if (field_name == NULL)
 		{
+			parser_free_type(type);
 			goto error;
 		}
 
@@ -1360,6 +1447,7 @@ parser_parse_struct(Parser *parser, AstBody *program, const Token *name_token, A
 
 		if (field == NULL)
 		{
+			parser_free_type(type);
 			goto error;
 		}
 
@@ -1432,7 +1520,7 @@ parser_parse_members(Parser *parser, AstBody *members)
 }
 
 static int
-parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public, AstType carrier, bool has_carrier)
+parser_parse_enum(Parser *parser, AstBody *program, const Token *name_token, AstName name, bool is_public, AstType *carrier, bool has_carrier)
 {
 	AstNode *node = parser_new_node(name_token, AST_DECL_ENUM);
 
@@ -1479,7 +1567,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 	while (!parser_check(parser, TOKEN_END) && !parser_check(parser, TOKEN_EOF))
 	{
 		const Token *member_token = parser_peek(parser);
-		AstType type;
+		AstType *type = NULL;
 		ParserTypeStatus status = parser_parse_type(parser, &type);
 
 		if (status != PARSER_TYPE_VALID)
@@ -1496,6 +1584,7 @@ parser_parse_union(Parser *parser, AstBody *program, const Token *name_token, As
 
 		if (member == NULL)
 		{
+			parser_free_type(type);
 			goto error;
 		}
 
@@ -1615,7 +1704,7 @@ parser_parse_named_declaration(Parser *parser, AstBody *program)
 	bool is_unsafe = parser_match(parser, TOKEN_UNSAFE);
 
 	// An enum can declare its carrier type before the `enum` keyword.
-	AstType carrier = { 0 };
+	AstType *carrier = NULL;
 	bool has_carrier = false;
 
 	if (parser_is_type_start(parser_peek(parser)->kind))
@@ -1703,6 +1792,7 @@ parser_free_node(AstNode *node)
 	switch (node->kind)
 	{
 		case AST_DECL_FUNCTION:
+			parser_free_type(node->as.function.result);
 			parser_free_body(&node->as.function.params);
 			parser_free_body(&node->as.function.body);
 			break;
@@ -1712,6 +1802,7 @@ parser_free_node(AstNode *node)
 			break;
 
 		case AST_DECL_ENUM:
+			parser_free_type(node->as.enum_decl.carrier);
 			parser_free_body(&node->as.enum_decl.members);
 			break;
 
@@ -1752,6 +1843,26 @@ parser_free_node(AstNode *node)
 			parser_free_body(&node->as.handle.body);
 			break;
 
+		case AST_PARAM:
+			parser_free_type(node->as.param.type);
+			break;
+
+		case AST_FIELD:
+			parser_free_type(node->as.field.type);
+			break;
+
+		case AST_UNION_MEMBER:
+			parser_free_type(node->as.union_member.type);
+			break;
+
+		case AST_VARIABLE:
+			parser_free_type(node->as.variable.type);
+			break;
+
+		case AST_AS:
+			parser_free_type(node->as.as_cast.type);
+			break;
+
 		default:
 			break;
 	}
@@ -1780,6 +1891,87 @@ parser_print_span(const AstSpan *span)
 	for (size_t i = 0; i < span->count; i++)
 	{
 		parser_print_token(&span->first[i]);
+	}
+}
+
+static void
+parser_print_type_member(const AstTypeMember *member)
+{
+	switch (member->kind)
+	{
+		case AST_TYPE_MEMBER_TYPE:
+			parser_print_type(member->as.type);
+			break;
+
+		case AST_TYPE_MEMBER_SIZE:
+			parser_print_token(&member->as.size);
+			break;
+
+		case AST_TYPE_MEMBER_PLACEHOLDER:
+			printf("_");
+			break;
+	}
+}
+
+static void
+parser_print_type(const AstType *type)
+{
+	switch (type->kind)
+	{
+		case AST_TYPE_BASE:
+			parser_print_span(&type->as.base.name);
+			break;
+
+		case AST_TYPE_GENERIC:
+			parser_print_type(type->as.generic.base);
+			printf("<");
+
+			for (size_t i = 0; i < type->as.generic.arguments.count; i++)
+			{
+				if (i > 0)
+				{
+					printf(" ");
+				}
+
+				parser_print_type_member(&type->as.generic.arguments.items[i]);
+			}
+
+			printf(">");
+			break;
+
+		case AST_TYPE_UNION:
+			printf("|");
+
+			for (size_t i = 0; i < type->as.union_type.members.count; i++)
+			{
+				if (i > 0)
+				{
+					printf(" ");
+				}
+
+				parser_print_type_member(&type->as.union_type.members.items[i]);
+			}
+
+			printf("|");
+			break;
+
+		case AST_TYPE_STRUCT:
+			printf("{");
+
+			for (size_t i = 0; i < type->as.struct_type.fields.count; i++)
+			{
+				if (i > 0)
+				{
+					printf(" ");
+				}
+
+				parser_print_type(type->as.struct_type.fields.items[i].type);
+				printf(" ");
+				parser_print_span(&type->as.struct_type.fields.items[i].name);
+			}
+
+			printf("}");
+			break;
 	}
 }
 
@@ -1830,7 +2022,7 @@ parser_print_node(const AstNode *node, int depth)
 			{
 				parser_print_indent(depth);
 				printf("result ");
-				parser_print_span(&node->as.function.result);
+				parser_print_type(node->as.function.result);
 				printf("\n");
 			}
 			break;
@@ -1849,7 +2041,7 @@ parser_print_node(const AstNode *node, int depth)
 			if (node->as.enum_decl.has_carrier)
 			{
 				printf(" carrier ");
-				parser_print_span(&node->as.enum_decl.carrier);
+				parser_print_type(node->as.enum_decl.carrier);
 			}
 
 			printf("\n");
@@ -1879,13 +2071,13 @@ parser_print_node(const AstNode *node, int depth)
 
 		case AST_PARAM:
 			printf("param ");
-			parser_print_span(&node->as.param.type);
+			parser_print_type(node->as.param.type);
 			printf("\n");
 			break;
 
 		case AST_FIELD:
 			printf("field ");
-			parser_print_span(&node->as.field.type);
+			parser_print_type(node->as.field.type);
 			printf(" ");
 			parser_print_span(&node->as.field.name);
 			printf("%s\n", node->as.field.is_public ? " public" : " private");
@@ -1906,7 +2098,7 @@ parser_print_node(const AstNode *node, int depth)
 
 		case AST_UNION_MEMBER:
 			printf("member ");
-			parser_print_span(&node->as.union_member.type);
+			parser_print_type(node->as.union_member.type);
 			printf("\n");
 			break;
 
@@ -1928,7 +2120,7 @@ parser_print_node(const AstNode *node, int depth)
 			printf(" ");
 			parser_print_token(&node->as.variable.mutability);
 			printf(" ");
-			parser_print_span(&node->as.variable.type);
+			parser_print_type(node->as.variable.type);
 			printf("\n");
 			break;
 
@@ -1946,7 +2138,7 @@ parser_print_node(const AstNode *node, int depth)
 
 		case AST_AS:
 			printf("as ");
-			parser_print_span(&node->as.as_cast.type);
+			parser_print_type(node->as.as_cast.type);
 			printf("\n");
 			break;
 
