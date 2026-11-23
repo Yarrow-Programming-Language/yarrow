@@ -2502,7 +2502,18 @@ parser_move_diagnostics(Parser *parser, ParserDiagnostics *out)
 static int
 parser_parse_internal(const Token *tokens, size_t count, const char *file_name, bool recover, AstBody *program, ParserDiagnostics *diagnostics)
 {
-	if (tokens == NULL || count == 0 || program == NULL)
+	// The output is initialized before any validation so callers can
+	// safely free it even when the arguments are invalid.
+	if (program == NULL)
+	{
+		return EXIT_FAILURE;
+	}
+
+	program->items = NULL;
+	program->count = 0;
+	program->capacity = 0;
+
+	if (tokens == NULL || count == 0)
 	{
 		return EXIT_FAILURE;
 	}
@@ -2514,10 +2525,6 @@ parser_parse_internal(const Token *tokens, size_t count, const char *file_name, 
 		.file_name = file_name,
 		.recover = recover
 	};
-
-	program->items = NULL;
-	program->count = 0;
-	program->capacity = 0;
 
 	while (!parser_check(&parser, TOKEN_EOF))
 	{
